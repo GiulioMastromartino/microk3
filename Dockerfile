@@ -45,5 +45,6 @@ exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Run with gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
+# Run with python app.py directly to ensure main block executes (starting ROS manager thread)
+# Gunicorn skips the __main__ block, so the ROS thread was never starting
+CMD ["python3", "app.py"]
