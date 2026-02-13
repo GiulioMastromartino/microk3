@@ -1,6 +1,6 @@
 # MicroK3 🚀
 
-A Flask-based web dashboard for monitoring and managing distributed STM32H743VIT6 microcontroller nodes with automatic failover capabilities, now integrated with ROS 2.
+A Flask-based web dashboard for monitoring and managing distributed STM32 microcontroller nodes integrated with ROS 2.
 
 ![Version](https://img.shields.io/badge/version-0.2.1-blue)
 ![Python](https://img.shields.io/badge/python-3.9+-green)
