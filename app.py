@@ -11,9 +11,18 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from functools import wraps
+import threading
 
 from models.node import Node
 from config import get_config
+
+# Attempt to import ROS interface, handle failure if ROS 2 not installed
+try:
+    from ros_interface import ROS2Manager
+    ROS_AVAILABLE = True
+except ImportError:
+    ROS_AVAILABLE = False
+    print("⚠️  ROS 2 libraries not found. Running in simulation mode.")
 
 # Load environment variables
 load_dotenv()
@@ -52,6 +61,8 @@ limiter = Limiter(
     storage_uri=app.config['RATELIMIT_STORAGE_URL']
 )
 
+# ROS 2 Manager Instance
+ros_manager = None
 
 @auth.verify_password
 def verify_password(username: str, password: str) -> Optional[str]:
@@ -199,6 +210,46 @@ def get_node_by_id(node_id: int) -> Optional[Node]:
             return node
     return None
 
+# ----------------------------------------------------------------------------
+# ROS 2 Integration Logic
+# ----------------------------------------------------------------------------
+
+def ros_update_callback(action, data):
+    """Callback function called by ROS thread to update Flask state"""
+    with app.app_context():
+        try:
+            if action == 'update_node':
+                node_id = data.get('id')
+                node = get_node_by_id(node_id)
+                if node:
+                    if 'status' in data:
+                        node.status = data['status']
+                    if 'health' in data:
+                        node.health_score = data['health']
+                    if 'uptime' in data:
+                        node.uptime = data['uptime']
+                    
+                    save_system_data(system_data)
+                    logger.info(f"ROS update: Node {node_id} updated")
+                else:
+                    logger.warning(f"ROS update: Node {node_id} not found")
+
+            elif action == 'add_failure':
+                node_id = data.get('node_id')
+                if get_node_by_id(node_id):
+                    new_failure = {
+                        "id": len(system_data.get('failures', [])) + 1,
+                        "timestamp": datetime.now().isoformat(),
+                        "node_id": node_id,
+                        "description": data.get('msg', 'Unknown Error'),
+                        "status": data.get('level', 'warning')
+                    }
+                    system_data.setdefault('failures', []).append(new_failure)
+                    save_system_data(system_data)
+                    logger.warning(f"ROS alert: {data}")
+
+        except Exception as e:
+            logger.error(f"Error in ROS callback: {e}")
 
 # ============================================================================
 # WEB ROUTES
@@ -237,8 +288,9 @@ def api_system_status():
             "nodes_online": active_nodes,
             "total_nodes": len(system_data['nodes']),
             "tasks_running": len(system_data.get('tasks', {})),
-            "network_latency": 12,
-            "timestamp": datetime.now().isoformat()
+            "network_latency": 12,  # TODO: Calculate actual latency
+            "timestamp": datetime.now().isoformat(),
+            "ros_connected": ROS_AVAILABLE and ros_manager.running if ros_manager else False
         }), 200
         
     except Exception as e:
@@ -331,6 +383,11 @@ def update_node():
             try:
                 node.update_status(data['status'])
                 updated_fields.append('status')
+                
+                # Forward to ROS if available
+                if ROS_AVAILABLE and ros_manager:
+                    ros_manager.send_command(node_id, f"SET_STATUS:{data['status']}")
+                    
             except ValueError as e:
                 return jsonify({"error": str(e)}), 400
         
@@ -450,7 +507,8 @@ def health():
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
-        "version": "0.1.0"
+        "version": "0.1.0",
+        "ros_connected": ROS_AVAILABLE and ros_manager.running if ros_manager else False
     }), 200
 
 
@@ -459,6 +517,12 @@ def health():
 # ============================================================================
 
 if __name__ == '__main__':
+    # Start ROS Manager if available
+    if ROS_AVAILABLE:
+        ros_manager = ROS2Manager(ros_update_callback)
+        ros_manager.start()
+        print("✅ ROS 2 Manager started")
+    
     # Get configuration from environment
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
     host = os.environ.get('FLASK_HOST', '127.0.0.1')
@@ -472,4 +536,8 @@ if __name__ == '__main__':
     if host == '0.0.0.0':
         logger.warning("⚠️  Server exposed on all interfaces (0.0.0.0). Ensure firewall is configured!")
     
-    app.run(debug=debug_mode, host=host, port=port)
+    try:
+        app.run(debug=debug_mode, host=host, port=port, use_reloader=False) # use_reloader=False to avoid starting ROS threads twice
+    finally:
+        if ROS_AVAILABLE and ros_manager:
+            ros_manager.stop()
