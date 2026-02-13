@@ -16,6 +16,8 @@ services:
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+    depends_on:
+      - uros-agent
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
@@ -23,3 +25,15 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
+
+  uros-agent:
+    image: microros/micro-ros-agent:humble
+    container_name: uros-agent
+    # Expose UDP port for Micro-ROS clients (STM32) to connect to
+    ports:
+      - "8888:8888/udp"
+    # Run agent for UDPv4 on port 8888
+    command: udp4 --port 8888
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+    restart: unless-stopped
