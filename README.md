@@ -101,6 +101,69 @@ The application uses a dedicated ROS 2 node (`microk3_dashboard`) running inside
 5. **Access Dashboard:**
    Open http://localhost:5050
 
+## Simulating Nodes
+
+If you don't have hardware yet, you can simulate nodes using the CLI or a Python script inside the container.
+
+### Option 1: One-Liner (CLI)
+Run this command from your host terminal to inject a simulated node:
+
+```bash
+# 1. Enter the running container
+docker exec -it microk3 bash
+
+# 2. Source ROS 2 (Required)
+source /opt/ros/humble/setup.bash
+
+# 3. Publish a fake node status
+ros2 topic pub --once /microk3/node_status std_msgs/msg/String "{data: '{\"id\": 1, \"status\": \"active\", \"health\": 100, \"uptime\": \"0h 1m\", \"type\": \"Virtual Node\"}'}"
+```
+
+### Option 2: Python Simulation Script
+Create a file named `simulate_nodes.py` (or run interactively inside the container):
+
+```python
+import rclpy
+from rclpy.node import Node
+from std_msgs.msg import String
+import json
+import time
+import random
+
+def main():
+    rclpy.init()
+    node = Node('virtual_stm32')
+    publisher = node.create_publisher(String, '/microk3/node_status', 10)
+    
+    print("🚀 Starting Virtual Node Simulation...")
+    
+    try:
+        while True:
+            # Simulate Node 1
+            msg = String()
+            data = {
+                "id": 1,
+                "status": "active",
+                "health": random.randint(90, 100),
+                "uptime": "1h 30m",
+                "type": "Simulated STM32"
+            }
+            msg.data = json.dumps(data)
+            publisher.publish(msg)
+            print(f"Published: {msg.data}")
+            
+            time.sleep(2.0) # Update every 2 seconds
+            
+    except KeyboardInterrupt:
+        print("Stopping simulation...")
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+```
+
 ## Development
 
 ### Running Without Docker (MacOS/Linux)
@@ -122,18 +185,6 @@ If you prefer running natively, you must have ROS 2 installed on your host machi
    ```bash
    python app.py
    ```
-
-### Testing ROS 2 Connection
-You can test the integration by sending messages from your host machine (if ROS 2 is installed locally) or by executing into the container:
-
-**Simulate a Node Update:**
-```bash
-# Execute into the running microk3 container
-docker exec -it microk3 bash
-
-# Send a test message
-ros2 topic pub --once /microk3/node_status std_msgs/msg/String "{data: '{\"id\": 1, \"status\": \"standby\", \"health\": 50}'}"
-```
 
 ## License
 
