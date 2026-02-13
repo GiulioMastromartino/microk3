@@ -1,0 +1,138 @@
+body {
+    background-color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.sidebar {
+    background: linear-gradient(180deg, #2c3e50, #1a2530);
+    color: white;
+    height: 100vh;
+    position: fixed;
+    overflow-y: auto;
+}
+
+.main-content {
+    margin-left: 250px;
+    padding: 20px;
+}
+
+.card {
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    border: none;
+    margin-bottom: 20px;
+    transition: transform 0.3s ease;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+}
+
+.node-card {
+    border-left: 4px solid #3498db;
+}
+
+.active-node {
+    border-left: 4px solid #27ae60;
+}
+
+.standby-node {
+    border-left: 4px solid #f39c12;
+}
+
+.error-node {
+    border-left: 4px solid #e74c3c;
+}
+
+.status-indicator {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 8px;
+}
+
+.status-active {
+    background-color: #27ae60;
+}
+
+.status-standby {
+    background-color: #f39c12;
+}
+
+.status-error {
+    background-color: #e74c3c;
+}
+
+.node-header {
+    padding: 15px 20px;
+    border-bottom: 1px solid rgba(0,0,0,0.05);
+}
+
+.node-body {
+    padding: 15px 20px;
+}
+
+.task-badge {
+    font-size: 0.85rem;
+    margin-right: 5px;
+    margin-bottom: 5px;
+}
+
+.chart-container {
+    position: relative;
+    height: 300px;
+}
+
+.health-score {
+    width: 100%;
+    height: 10px;
+    background-color: #e0e0e0;
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.health-fill {
+    height: 100%;
+    background-color: #27ae60;
+    border-radius: 5px;
+}
+
+.failover-indicator {
+    padding: 10px;
+    border-radius: 8px;
+    margin-bottom: 15px;
+    background-color: rgba(231, 76, 60, 0.1);
+    border: 1px solid #e74c3c;
+}
+
+.failover-indicator i {
+    font-size: 1.5rem;
+    color: #e74c3c;
+    margin-right: 10px;
+}
+
+.system-status {
+    font-size: 1.2rem;
+    font-weight: 600;
+}
+
+.system-status.active {
+    color: #27ae60;
+}
+
+.system-status.degraded {
+    color: #f39c12;
+}
+
+.system-status.error {
+    color: #e74c3c;
+}
+
+.badge-node {
+    font-size: 0.9rem;
+}
+
+.navbar-brand {
+    font-weight: bold;
+}

@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="fas fa-server me-2"></i>Node Management</h2>
+</div>
+
+<div class="row">
+    {% for node in system_data.nodes %}
+    <div class="col-md-4 mb-4">
+        <div class="card node-card {% if node.status == 'active' %}active-node{% elif node.status == 'standby' %}standby-node{% else %}error-node{% endif %}">
+            <div class="node-header">
+                <h5><i class="fas fa-microchip me-2"></i>{{ node.name }}</h5>
+                <div class="d-flex justify-content-between align-items-center">
+                    <span>{{ node.status.title() }}</span>
+                    <span class="badge {% if node.status == 'active' %}bg-success{% elif node.status == 'standby' %}bg-warning{% else %}bg-danger{% endif %}">{{ node.status|title }}</span>
+                </div>
+            </div>
+            <div class="node-body">
+                <p><i class="fas fa-microchip me-2"></i>{{ node.type }}</p>
+                <p><i class="fas fa-memory me-2"></i>RAM: {{ node.ram }}</p>
+                <p><i class="fas fa-hdd me-2"></i>Flash: {{ node.flash }}</p>
+                <p><i class="fas fa-bolt me-2"></i>CPU: {{ node.cpu }}</p>
+                <div class="mb-2">
+                    <span>Active Tasks:</span>
+                    {% for task in node.active_tasks %}
+                    <span class="badge bg-primary task-badge">{{ task }}</span>
+                    {% endfor %}
+                </div>
+                <div class="mb-2">
+                    <span>Health Score:</span>
+                    <div class="health-score">
+                        <div class="health-fill" style="width: {{ node.health_score }}%"></div>
+                    </div>
+                </div>
+                <p><i class="fas fa-heartbeat me-2"></i>Uptime: {{ node.uptime }}</p>
+                <div class="mt-3">
+                    <button class="btn btn-sm btn-outline-primary me-2">View Logs</button>
+                    {% if node.status == 'active' %}
+                    <button class="btn btn-sm btn-outline-warning" onclick="changeNodeStatus({{ node.id }}, 'standby')">Set Standby</button>
+                    {% else %}
+                    <button class="btn btn-sm btn-outline-success" onclick="changeNodeStatus({{ node.id }}, 'active')">Set Active</button>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+function changeNodeStatus(nodeId, newStatus) {
+    fetch('/api/update_node', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            node_id: nodeId,
+            status: newStatus
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert(`Node ${nodeId} updated to ${newStatus} status`);
+            location.reload();
+        } else {
+            alert('Failed to update node status');
+        }
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        alert('Failed to update node status');
+    });
+}
+</script>
+{% endblock %}
