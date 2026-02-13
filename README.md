@@ -103,13 +103,14 @@ The application uses a dedicated ROS 2 node (`microk3_dashboard`) running inside
 
 ## Simulating Nodes
 
-If you don't have hardware yet, you can simulate nodes using the CLI or a Python script inside the container.
+If you don't have hardware yet, you can simulate nodes using the CLI inside the container.
 
 ### Option 1: One-Liner (CLI)
-Run this command from your host terminal to inject a simulated node:
+Run this command from your host terminal to inject a simulated node.
+**Note:** We explicitly use `bash` to ensure the `source` command works correctly.
 
 ```bash
-# 1. Enter the running container
+# 1. Enter the running container using bash
 docker exec -it microk3 bash
 
 # 2. Source ROS 2 (Required)
@@ -118,6 +119,8 @@ source /opt/ros/humble/setup.bash
 # 3. Publish a fake node status
 ros2 topic pub --once /microk3/node_status std_msgs/msg/String "{data: '{\"id\": 1, \"status\": \"active\", \"health\": 100, \"uptime\": \"0h 1m\", \"type\": \"Virtual Node\"}'}"
 ```
+
+*Troubleshooting:* If you see `/bin/sh: source: not found`, ensure you used `docker exec -it microk3 bash` (not just `sh`), or use `. /opt/ros/humble/setup.sh` instead.
 
 ### Option 2: Python Simulation Script
 Create a file named `simulate_nodes.py` (or run interactively inside the container):
