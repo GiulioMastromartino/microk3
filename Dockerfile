@@ -1,10 +1,14 @@
-FROM python:3.11-slim
+FROM ros:humble-ros-base-jammy
 
 # Set working directory
 WORKDIR /app
 
 # Install system dependencies
+# python3-pip is needed because ROS image is minimal
+# gcc for compiling some python deps
 RUN apt-get update && apt-get install -y \
+    python3-pip \
+    python3-venv \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
@@ -12,7 +16,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+# Note: We use system packages for ROS 2, but pip for the rest
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . .
@@ -29,9 +34,13 @@ ENV PYTHONUNBUFFERED=1
 # Expose port
 EXPOSE 5050
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:5050/health')" || exit 1
+# Source ROS 2 setup in entrypoint
+# We create a custom entrypoint to ensure ROS is sourced before app starts
+RUN echo '#!/bin/bash\n\
+source /opt/ros/humble/setup.bash\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
 
 # Run with gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "app:app"]
