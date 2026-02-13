@@ -261,7 +261,15 @@ def index():
     # Convert Node objects to dicts for template
     template_data = system_data.copy()
     template_data['nodes'] = [node.to_dict() for node in system_data['nodes']]
-    return render_template('index.html', system_data=template_data)
+    
+    # Check if ROS is connected (Agent is running)
+    ros_connected = False
+    if ROS_AVAILABLE and ros_manager:
+        # Check if the publisher/subscriber is actually active/created
+        # Even if no peers (clients) are connected, the node itself is running
+        ros_connected = ros_manager.running
+
+    return render_template('index.html', system_data=template_data, ros_connected=ros_connected)
 
 
 @app.route('/nodes')
@@ -283,6 +291,12 @@ def api_system_status():
     try:
         active_nodes = sum(1 for n in system_data['nodes'] if n.is_active)
         
+        # ROS connection status: True if manager is running (Agent detected/Node active)
+        # It does NOT require active client nodes to be considered "connected" to the mesh
+        ros_connected = False
+        if ROS_AVAILABLE and ros_manager:
+            ros_connected = ros_manager.running
+
         return jsonify({
             "status": system_data.get("system_status", "unknown"),
             "nodes_online": active_nodes,
@@ -290,7 +304,7 @@ def api_system_status():
             "tasks_running": len(system_data.get('tasks', {})),
             "network_latency": 12,  # TODO: Calculate actual latency
             "timestamp": datetime.now().isoformat(),
-            "ros_connected": ROS_AVAILABLE and ros_manager.running if ros_manager else False
+            "ros_connected": ros_connected
         }), 200
         
     except Exception as e:
@@ -384,8 +398,8 @@ def update_node():
                 node.update_status(data['status'])
                 updated_fields.append('status')
                 
-                # Forward to ROS if available
-                if ROS_AVAILABLE and ros_manager:
+                # Forward to ROS if available (Even if no clients are listening)
+                if ROS_AVAILABLE and ros_manager and ros_manager.running:
                     ros_manager.send_command(node_id, f"SET_STATUS:{data['status']}")
                     
             except ValueError as e:
@@ -504,11 +518,15 @@ def internal_error(e):
 @app.route('/health')
 def health():
     """Health check endpoint"""
+    ros_connected = False
+    if ROS_AVAILABLE and ros_manager:
+        ros_connected = ros_manager.running
+        
     return jsonify({
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "version": "0.1.0",
-        "ros_connected": ROS_AVAILABLE and ros_manager.running if ros_manager else False
+        "ros_connected": ros_connected
     }), 200
 
 
