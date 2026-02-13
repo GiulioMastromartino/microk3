@@ -6,10 +6,13 @@ WORKDIR /app
 # Install system dependencies
 # python3-pip is needed because ROS image is minimal
 # gcc for compiling some python deps
+# Explicitly install message packages to ensure they are available
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     gcc \
+    ros-humble-std-msgs \
+    ros-humble-sensor-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for caching)
