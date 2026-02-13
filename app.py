@@ -305,11 +305,9 @@ def index():
     if not system_data:
         return "System initializing...", 503
 
-    # Convert Node objects to dicts for template
     template_data = system_data.copy()
     template_data['nodes'] = [node.to_dict() for node in system_data['nodes']]
     
-    # Check if ROS is connected (Agent is running)
     ros_connected = False
     if ROS_AVAILABLE and ros_manager:
         ros_connected = ros_manager.running
@@ -326,6 +324,67 @@ def nodes():
     template_data = system_data.copy()
     template_data['nodes'] = [node.to_dict() for node in system_data['nodes']]
     return render_template('node.html', system_data=template_data)
+
+
+@app.route('/failures')
+def failures():
+    """Failures history page"""
+    if not system_data:
+        return "System initializing...", 503
+        
+    template_data = system_data.copy()
+    # Sort failures by timestamp descending
+    template_data['failures'] = sorted(
+        system_data.get('failures', []), 
+        key=lambda x: x['timestamp'], 
+        reverse=True
+    )
+    return render_template('failures.html', system_data=template_data)
+
+
+@app.route('/network')
+def network():
+    """Network status page"""
+    if not system_data:
+        return "System initializing...", 503
+    
+    ros_connected = False
+    if ROS_AVAILABLE and ros_manager:
+        ros_connected = ros_manager.running
+        
+    return render_template('network.html', system_data=system_data, ros_connected=ros_connected)
+
+
+@app.route('/configuration')
+@auth.login_required
+def configuration():
+    """Configuration page"""
+    config_data = {
+        "admin_username": app.config.get('ADMIN_USERNAME'),
+        "log_level": app.config.get('LOG_LEVEL'),
+        "ros_domain_id": os.environ.get('ROS_DOMAIN_ID', '0'),
+        "flask_env": os.environ.get('FLASK_ENV', 'production')
+    }
+    return render_template('configuration.html', config=config_data)
+
+
+@app.route('/logs')
+@auth.login_required
+def logs():
+    """View application logs"""
+    log_lines = []
+    try:
+        log_file = Path(app.config['LOG_FILE'])
+        if log_file.exists():
+            with open(log_file, 'r') as f:
+                # Read last 100 lines
+                log_lines = f.readlines()[-100:]
+                log_lines.reverse() # Show newest first
+    except Exception as e:
+        logger.error(f"Error reading logs: {e}")
+        log_lines = [f"Error reading logs: {e}"]
+        
+    return render_template('logs.html', logs=log_lines)
 
 
 # ============================================================================
@@ -486,8 +545,6 @@ def add_failure():
             return jsonify({"error": f"Missing required fields: {missing}"}), 400
         
         node_id = int(data['node_id'])
-        # NOTE: With ROS auto-discovery, we might accept failures for nodes that don't exist yet?
-        # For now, keep requirement that node must exist
         if not get_node_by_id(node_id):
             return jsonify({"error": f"Node {node_id} not found"}), 404
         
@@ -582,8 +639,7 @@ if __name__ == '__main__':
     else:
         print("⚠️  ROS 2 Manager NOT started (Dependencies missing)")
     
-    # Initialize system data AFTER starting ROS manager 
-    # so we can check ros_manager.running inside get_default_data
+    # Initialize system data AFTER starting ROS manager
     system_data = load_system_data()
 
     # Get configuration from environment
