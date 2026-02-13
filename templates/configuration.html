@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="fas fa-cogs me-2"></i>System Configuration</h2>
+    <span class="badge bg-warning text-dark"><i class="fas fa-lock me-1"></i>Protected Area</span>
+</div>
+
+<div class="row">
+    <!-- Environment Settings -->
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0">Environment Settings</h5>
+            </div>
+            <div class="card-body">
+                <form>
+                    <div class="mb-3">
+                        <label class="form-label">Admin Username</label>
+                        <input type="text" class="form-control" value="{{ config.admin_username }}" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Environment</label>
+                        <input type="text" class="form-control" value="{{ config.flask_env }}" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">ROS Domain ID</label>
+                        <input type="text" class="form-control" value="{{ config.ros_domain_id }}" readonly>
+                        <div class="form-text">Controlled by container environment variable.</div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Application Settings -->
+    <div class="col-md-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0">Application Settings</h5>
+            </div>
+            <div class="card-body">
+                <form>
+                    <div class="mb-3">
+                        <label class="form-label">Log Level</label>
+                        <select class="form-select" disabled>
+                            <option {% if config.log_level == 'DEBUG' %}selected{% endif %}>DEBUG</option>
+                            <option {% if config.log_level == 'INFO' %}selected{% endif %}>INFO</option>
+                            <option {% if config.log_level == 'WARNING' %}selected{% endif %}>WARNING</option>
+                            <option {% if config.log_level == 'ERROR' %}selected{% endif %}>ERROR</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Rate Limit</label>
+                        <input type="text" class="form-control" value="30 per minute" readonly>
+                    </div>
+                    <div class="mt-4">
+                        <button type="button" class="btn btn-secondary" disabled>Save Changes (Read Only)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="alert alert-info">
+    <i class="fas fa-info-circle me-2"></i>
+    Configuration is currently managed via environment variables (`.env` file) and Docker Compose settings.
+</div>
+{% endblock %}

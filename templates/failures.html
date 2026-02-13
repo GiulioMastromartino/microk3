@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="fas fa-exclamation-triangle me-2"></i>System Failures</h2>
+    <a href="/failures" class="btn btn-outline-primary btn-sm">
+        <i class="fas fa-sync-alt me-1"></i> Refresh
+    </a>
+</div>
+
+<div class="card">
+    <div class="card-header bg-danger text-white">
+        <h5 class="mb-0">Failure History</h5>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Timestamp</th>
+                        <th>Node</th>
+                        <th>Description</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if not system_data.failures %}
+                    <tr>
+                        <td colspan="5" class="text-center py-4">
+                            <span class="text-success"><i class="fas fa-check-circle me-2"></i>No system failures recorded.</span>
+                        </td>
+                    </tr>
+                    {% else %}
+                        {% for failure in system_data.failures %}
+                        <tr>
+                            <td>#{{ failure.id }}</td>
+                            <td>{{ failure.timestamp }}</td>
+                            <td>Node {{ failure.node_id }}</td>
+                            <td>{{ failure.description }}</td>
+                            <td>
+                                <span class="badge {% if failure.status == 'open' %}bg-danger{% elif failure.status == 'resolved' %}bg-success{% else %}bg-warning{% endif %}">
+                                    {{ failure.status|title }}
+                                </span>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

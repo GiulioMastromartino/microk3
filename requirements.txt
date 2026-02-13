@@ -1,3 +1,19 @@
-Flask==2.3.3
-Flask-SQLAlchemy==3.0.5
-Werkzeug==2.3.7
+# Core
+Flask==3.0.2
+Werkzeug==3.0.1
+
+# Environment
+python-dotenv==1.0.1
+
+# Security
+Flask-HTTPAuth==4.8.0
+
+# Rate Limiting
+Flask-Limiter==3.5.1
+
+# Production Server
+gunicorn==21.2.0
+
+# Note: rclpy is required but must be sourced from ROS 2 environment
+# It cannot be installed via pip. 
+# Ensure you source your ROS 2 installation (e.g., source /opt/ros/humble/setup.bash)
