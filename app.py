@@ -80,62 +80,24 @@ def verify_password(username: str, password: str) -> Optional[str]:
     return None
 
 
-def load_system_data() -> Dict[str, Any]:
-    """Load system data from JSON file"""
-    try:
-        data_file = Path(app.config['DATA_FILE'])
-        if not data_file.exists():
-            logger.warning(f"Data file not found: {data_file}. Using default data.")
-            return get_default_data()
-        
-        with open(data_file, 'r') as f:
-            data = json.load(f)
-            
-        # Convert node dictionaries to Node objects
-        if 'nodes' in data:
-            data['nodes'] = [Node.from_dict(node) for node in data['nodes']]
-        
-        logger.info(f"Loaded system data from {data_file}")
-        return data
-        
-    except json.JSONDecodeError as e:
-        logger.error(f"Invalid JSON in data file: {e}")
-        return get_default_data()
-    except Exception as e:
-        logger.error(f"Error loading system data: {e}")
-        return get_default_data()
-
-
-def save_system_data(data: Dict[str, Any]) -> bool:
-    """Save system data to JSON file"""
-    try:
-        data_file = Path(app.config['DATA_FILE'])
-        data_file.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Convert Node objects to dictionaries
-        save_data = data.copy()
-        if 'nodes' in save_data:
-            save_data['nodes'] = [
-                node.to_dict() if isinstance(node, Node) else node 
-                for node in save_data['nodes']
-            ]
-        
-        # Write to temporary file first, then rename (atomic operation)
-        temp_file = data_file.with_suffix('.tmp')
-        with open(temp_file, 'w') as f:
-            json.dump(save_data, f, indent=4)
-        
-        temp_file.replace(data_file)
-        logger.info(f"Saved system data to {data_file}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error saving system data: {e}")
-        return False
+def get_empty_data() -> Dict[str, Any]:
+    """Return empty system data structure (for clean state)"""
+    return {
+        "nodes": [],
+        "failures": [],
+        "system_status": "waiting_for_nodes",
+        "tasks": {}
+    }
 
 
 def get_default_data() -> Dict[str, Any]:
-    """Return default system data"""
+    """Return default simulated system data (fallback only)"""
+    # If ROS is running, we prefer an empty state over fake data
+    if ROS_AVAILABLE and ros_manager and ros_manager.running:
+        logger.info("ROS 2 connected: initializing with empty state instead of simulation data")
+        return get_empty_data()
+
+    logger.info("ROS 2 not connected: initializing with simulation data")
     return {
         "nodes": [
             Node(
@@ -197,8 +159,62 @@ def get_default_data() -> Dict[str, Any]:
     }
 
 
-# Load system data at startup
-system_data = load_system_data()
+def load_system_data() -> Dict[str, Any]:
+    """Load system data from JSON file or initialize defaults"""
+    try:
+        data_file = Path(app.config['DATA_FILE'])
+        if data_file.exists():
+            with open(data_file, 'r') as f:
+                data = json.load(f)
+                
+            # Convert node dictionaries to Node objects
+            if 'nodes' in data:
+                data['nodes'] = [Node.from_dict(node) for node in data['nodes']]
+            
+            logger.info(f"Loaded persisted system data from {data_file}")
+            return data
+            
+        logger.warning(f"Data file not found: {data_file}. Initializing defaults.")
+        return get_default_data()
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON in data file: {e}")
+        return get_default_data()
+    except Exception as e:
+        logger.error(f"Error loading system data: {e}")
+        return get_default_data()
+
+
+def save_system_data(data: Dict[str, Any]) -> bool:
+    """Save system data to JSON file"""
+    try:
+        data_file = Path(app.config['DATA_FILE'])
+        data_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Convert Node objects to dictionaries
+        save_data = data.copy()
+        if 'nodes' in save_data:
+            save_data['nodes'] = [
+                node.to_dict() if isinstance(node, Node) else node 
+                for node in save_data['nodes']
+            ]
+        
+        # Write to temporary file first, then rename (atomic operation)
+        temp_file = data_file.with_suffix('.tmp')
+        with open(temp_file, 'w') as f:
+            json.dump(save_data, f, indent=4)
+        
+        temp_file.replace(data_file)
+        logger.info(f"Saved system data to {data_file}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error saving system data: {e}")
+        return False
+
+
+# Global variable to hold system data
+system_data = None  # Will be initialized in main block
 
 
 def require_json(f):
@@ -213,6 +229,8 @@ def require_json(f):
 
 def get_node_by_id(node_id: int) -> Optional[Node]:
     """Find node by ID"""
+    if not system_data or 'nodes' not in system_data:
+        return None
     for node in system_data['nodes']:
         if node.id == node_id:
             return node
@@ -228,33 +246,51 @@ def ros_update_callback(action, data):
         try:
             if action == 'update_node':
                 node_id = data.get('id')
+                # Check if node exists, if not create it (auto-discovery)
                 node = get_node_by_id(node_id)
+                
                 if node:
+                    # Update existing node
                     if 'status' in data:
                         node.status = data['status']
                     if 'health' in data:
                         node.health_score = data['health']
                     if 'uptime' in data:
                         node.uptime = data['uptime']
-                    
-                    save_system_data(system_data)
                     logger.info(f"ROS update: Node {node_id} updated")
                 else:
-                    logger.warning(f"ROS update: Node {node_id} not found")
+                    # Auto-discover new node
+                    logger.info(f"ROS discovery: New Node {node_id} detected")
+                    new_node = Node(
+                        id=node_id,
+                        name=f"Node {node_id}",
+                        status=data.get('status', 'unknown'),
+                        type="STM32H743VIT6", # Default, can be updated if msg includes it
+                        ram="Unknown",
+                        flash="Unknown",
+                        cpu="Unknown",
+                        active_tasks=[],
+                        health_score=data.get('health', 100),
+                        uptime=data.get('uptime', '0s'),
+                        network="ROS 2"
+                    )
+                    system_data['nodes'].append(new_node)
+                    
+                save_system_data(system_data)
 
             elif action == 'add_failure':
                 node_id = data.get('node_id')
-                if get_node_by_id(node_id):
-                    new_failure = {
-                        "id": len(system_data.get('failures', [])) + 1,
-                        "timestamp": datetime.now().isoformat(),
-                        "node_id": node_id,
-                        "description": data.get('msg', 'Unknown Error'),
-                        "status": data.get('level', 'warning')
-                    }
-                    system_data.setdefault('failures', []).append(new_failure)
-                    save_system_data(system_data)
-                    logger.warning(f"ROS alert: {data}")
+                # Log failure even if node is unknown yet
+                new_failure = {
+                    "id": len(system_data.get('failures', [])) + 1,
+                    "timestamp": datetime.now().isoformat(),
+                    "node_id": node_id,
+                    "description": data.get('msg', 'Unknown Error'),
+                    "status": data.get('level', 'warning')
+                }
+                system_data.setdefault('failures', []).append(new_failure)
+                save_system_data(system_data)
+                logger.warning(f"ROS alert: {data}")
 
         except Exception as e:
             logger.error(f"Error in ROS callback: {e}")
@@ -266,6 +302,9 @@ def ros_update_callback(action, data):
 @app.route('/')
 def index():
     """Main dashboard page"""
+    if not system_data:
+        return "System initializing...", 503
+
     # Convert Node objects to dicts for template
     template_data = system_data.copy()
     template_data['nodes'] = [node.to_dict() for node in system_data['nodes']]
@@ -281,6 +320,9 @@ def index():
 @app.route('/nodes')
 def nodes():
     """Nodes detail page"""
+    if not system_data:
+        return "System initializing...", 503
+        
     template_data = system_data.copy()
     template_data['nodes'] = [node.to_dict() for node in system_data['nodes']]
     return render_template('node.html', system_data=template_data)
@@ -295,10 +337,11 @@ def nodes():
 def api_system_status():
     """Get system status summary"""
     try:
+        if not system_data:
+            return jsonify({"error": "System initializing"}), 503
+
         active_nodes = sum(1 for n in system_data['nodes'] if n.is_active)
         
-        # ROS connection status: True if manager is running (Agent detected/Node active)
-        # It does NOT require active client nodes to be considered "connected" to the mesh
         ros_connected = False
         if ROS_AVAILABLE and ros_manager:
             ros_connected = ros_manager.running
@@ -308,7 +351,7 @@ def api_system_status():
             "nodes_online": active_nodes,
             "total_nodes": len(system_data['nodes']),
             "tasks_running": len(system_data.get('tasks', {})),
-            "network_latency": 12,  # TODO: Calculate actual latency
+            "network_latency": 0,
             "timestamp": datetime.now().isoformat(),
             "ros_connected": ros_connected
         }), 200
@@ -381,33 +424,26 @@ def update_node():
     try:
         data = request.get_json()
         
-        # Validate required fields
         if 'node_id' not in data:
             return jsonify({"error": "Missing required field: node_id"}), 400
         
-        # Validate node_id type
         try:
             node_id = int(data['node_id'])
         except (ValueError, TypeError):
             return jsonify({"error": "node_id must be an integer"}), 400
         
-        # Find node
         node = get_node_by_id(node_id)
         if not node:
             return jsonify({"error": f"Node {node_id} not found"}), 404
         
-        # Update fields
         updated_fields = []
         
         if 'status' in data:
             try:
                 node.update_status(data['status'])
                 updated_fields.append('status')
-                
-                # Forward to ROS if available (Even if no clients are listening)
                 if ROS_AVAILABLE and ros_manager and ros_manager.running:
                     ros_manager.send_command(node_id, f"SET_STATUS:{data['status']}")
-                    
             except ValueError as e:
                 return jsonify({"error": str(e)}), 400
         
@@ -418,7 +454,6 @@ def update_node():
             except (ValueError, TypeError) as e:
                 return jsonify({"error": str(e)}), 400
         
-        # Save changes
         if not save_system_data(system_data):
             return jsonify({"error": "Failed to persist changes"}), 500
         
@@ -445,18 +480,17 @@ def add_failure():
     try:
         data = request.get_json()
         
-        # Validate required fields
         required = ['node_id', 'description']
         missing = [f for f in required if f not in data]
         if missing:
             return jsonify({"error": f"Missing required fields: {missing}"}), 400
         
-        # Validate node exists
         node_id = int(data['node_id'])
+        # NOTE: With ROS auto-discovery, we might accept failures for nodes that don't exist yet?
+        # For now, keep requirement that node must exist
         if not get_node_by_id(node_id):
             return jsonify({"error": f"Node {node_id} not found"}), 404
         
-        # Create failure record
         new_failure = {
             "id": len(system_data.get('failures', [])) + 1,
             "timestamp": datetime.now().isoformat(),
@@ -467,9 +501,8 @@ def add_failure():
         
         system_data.setdefault('failures', []).append(new_failure)
         
-        # Save changes
         if not save_system_data(system_data):
-            system_data['failures'].pop()  # Rollback
+            system_data['failures'].pop()
             return jsonify({"error": "Failed to persist failure record"}), 500
         
         logger.warning(f"Failure logged for node {node_id}: {data['description']}")
@@ -549,6 +582,10 @@ if __name__ == '__main__':
     else:
         print("⚠️  ROS 2 Manager NOT started (Dependencies missing)")
     
+    # Initialize system data AFTER starting ROS manager 
+    # so we can check ros_manager.running inside get_default_data
+    system_data = load_system_data()
+
     # Get configuration from environment
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
     host = os.environ.get('FLASK_HOST', '127.0.0.1')
@@ -563,7 +600,7 @@ if __name__ == '__main__':
         logger.warning("⚠️  Server exposed on all interfaces (0.0.0.0). Ensure firewall is configured!")
     
     try:
-        app.run(debug=debug_mode, host=host, port=port, use_reloader=False) # use_reloader=False to avoid starting ROS threads twice
+        app.run(debug=debug_mode, host=host, port=port, use_reloader=False)
     finally:
         if ROS_AVAILABLE and ros_manager:
             ros_manager.stop()
