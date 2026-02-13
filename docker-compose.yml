@@ -4,18 +4,27 @@ services:
   microk3:
     build: .
     container_name: microk3
-    ports:
-      - "5050:5050"
+    # Use host network mode to allow DDS communication with host/other devices
+    # Note: On macOS/Windows Docker Desktop, host networking has limitations.
+    # We may need to use specific ports or a DDS configuration file.
+    network_mode: "host" 
     environment:
       - FLASK_ENV=production
       - SECRET_KEY=${SECRET_KEY}
       - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # ROS 2 Domain ID must match your other nodes
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # DDS Configuration (optional, but good for troubleshooting)
+      - RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-rmw_fastrtps_cpp}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
+      # Map shared memory for FastDDS if needed (Linux only)
+      - /dev/shm:/dev/shm
     restart: unless-stopped
+    # Healthcheck must use localhost since we are on host network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5050/health"]
       interval: 30s
