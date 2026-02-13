@@ -12,28 +12,19 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from functools import wraps
 import threading
+import sys
+import traceback
 
 from models.node import Node
 from config import get_config
 
-# Attempt to import ROS interface, handle failure if ROS 2 not installed
-try:
-    from ros_interface import ROS2Manager
-    ROS_AVAILABLE = True
-except ImportError:
-    ROS_AVAILABLE = False
-    print("⚠️  ROS 2 libraries not found. Running in simulation mode.")
-
-# Load environment variables
-load_dotenv()
+# Setup logging first to capture startup errors
+logs_dir = Path('logs')
+logs_dir.mkdir(exist_ok=True)
 
 # Initialize Flask app
 app = Flask(__name__, template_folder='templates')
 app.config.from_object(get_config())
-
-# Setup logging
-logs_dir = Path('logs')
-logs_dir.mkdir(exist_ok=True)
 
 logging.basicConfig(
     level=getattr(logging, app.config['LOG_LEVEL']),
@@ -44,6 +35,23 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+# Attempt to import ROS interface, handle failure if ROS 2 not installed
+try:
+    from ros_interface import ROS2Manager
+    ROS_AVAILABLE = True
+    logger.info("ROS 2 libraries loaded successfully")
+except ImportError as e:
+    ROS_AVAILABLE = False
+    logger.warning(f"⚠️  ROS 2 libraries not found: {e}")
+    print(f"DEBUG: ROS Import Error: {e}")
+except Exception as e:
+    ROS_AVAILABLE = False
+    logger.error(f"⚠️  Unexpected error loading ROS 2 interface: {e}")
+    traceback.print_exc()
+
+# Load environment variables
+load_dotenv()
 
 # Initialize authentication
 auth = HTTPBasicAuth()
@@ -265,8 +273,6 @@ def index():
     # Check if ROS is connected (Agent is running)
     ros_connected = False
     if ROS_AVAILABLE and ros_manager:
-        # Check if the publisher/subscriber is actually active/created
-        # Even if no peers (clients) are connected, the node itself is running
         ros_connected = ros_manager.running
 
     return render_template('index.html', system_data=template_data, ros_connected=ros_connected)
@@ -540,6 +546,8 @@ if __name__ == '__main__':
         ros_manager = ROS2Manager(ros_update_callback)
         ros_manager.start()
         print("✅ ROS 2 Manager started")
+    else:
+        print("⚠️  ROS 2 Manager NOT started (Dependencies missing)")
     
     # Get configuration from environment
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
