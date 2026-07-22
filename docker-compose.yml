@@ -37,3 +37,22 @@ services:
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
     restart: unless-stopped
+
+  renode-bridge:
+    build: .
+    container_name: microk3-renode-bridge
+    command: ["python3", "tools/renode_heartbeat_bridge.py"]
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RENODE_NODE_ID=${RENODE_NODE_ID:-755}
+      - RENODE_NODE_NAME=${RENODE_NODE_NAME:-renode-stm32h755}
+      - RENODE_NODE_TYPE=${RENODE_NODE_TYPE:-Renode STM32H755}
+      - RENODE_NODE_NETWORK=${RENODE_NODE_NETWORK:-Ethernet via TAP}
+      - RENODE_HEARTBEAT_TOPIC=${RENODE_HEARTBEAT_TOPIC:-heartbeat}
+      - RENODE_HEARTBEAT_TIMEOUT_SEC=${RENODE_HEARTBEAT_TIMEOUT_SEC:-5.0}
+      - MICROK3_STATUS_TOPIC=${MICROK3_STATUS_TOPIC:-microk3/node_status}
+      - MICROK3_ALERT_TOPIC=${MICROK3_ALERT_TOPIC:-microk3/system_alerts}
+      - MICROK3_COMMAND_TOPIC=${MICROK3_COMMAND_TOPIC:-microk3/commands}
+    depends_on:
+      - uros-agent
+    restart: unless-stopped

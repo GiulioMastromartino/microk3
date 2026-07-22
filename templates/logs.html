@@ -2,18 +2,57 @@
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="fas fa-list-alt me-2"></i>System Logs</h2>
+    <h2>
+        <i class="fas fa-list-alt me-2"></i>
+        {% if node %}
+        {{ node.name }} Logs
+        {% else %}
+        System Logs
+        {% endif %}
+    </h2>
     <div>
         <span class="text-muted small me-2">Showing last 100 lines</span>
-        <a href="/logs" class="btn btn-outline-primary btn-sm">
+        <a href="{% if node %}{{ url_for('node_logs', node_id=node.id) }}{% else %}{{ url_for('logs') }}{% endif %}" class="btn btn-outline-primary btn-sm">
             <i class="fas fa-sync-alt me-1"></i> Refresh
         </a>
     </div>
 </div>
 
+{% if node %}
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row">
+            <div class="col-md-3">
+                <strong>Node ID</strong>
+                <div class="text-muted">{{ node.id }}</div>
+            </div>
+            <div class="col-md-3">
+                <strong>Status</strong>
+                <div class="text-muted">{{ node.status|title }}</div>
+            </div>
+            <div class="col-md-3">
+                <strong>Type</strong>
+                <div class="text-muted">{{ node.type }}</div>
+            </div>
+            <div class="col-md-3">
+                <strong>Uptime</strong>
+                <div class="text-muted">{{ node.uptime }}</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
 <div class="card bg-dark text-light">
     <div class="card-header border-secondary d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="fas fa-terminal me-2"></i>Console Output</h5>
+        <h5 class="mb-0">
+            <i class="fas fa-terminal me-2"></i>
+            {% if node %}
+            Filtered Application Output
+            {% else %}
+            Console Output
+            {% endif %}
+        </h5>
         <div class="status-indicator status-active"></div>
     </div>
     <div class="card-body p-0">
@@ -26,7 +65,11 @@
                 {% endfor %}
             {% else %}
                 <div class="text-muted text-center py-5">
+                    {% if node %}
+                    No log lines matched this node yet.
+                    {% else %}
                     No logs available.
+                    {% endif %}
                 </div>
             {% endif %}
         </div>

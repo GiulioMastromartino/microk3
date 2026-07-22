@@ -1,0 +1,370 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap ros-toolbar">
+    <div>
+        <h2 class="mb-1"><i class="fas fa-wave-square me-2"></i>ROS 2 Inspector</h2>
+        <p class="text-muted mb-0">Browse the ROS graph and watch topic values update in near real time.</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <span id="ros-connection-badge" class="badge {% if ros_state.ros_connected %}bg-success{% else %}bg-secondary{% endif %} ros-status-pill">
+            {% if ros_state.ros_connected %}ROS 2 Connected{% else %}ROS 2 Disconnected{% endif %}
+        </span>
+        <button id="refresh-ros-btn" class="btn btn-outline-primary btn-sm">
+            <i class="fas fa-sync-alt me-1"></i>Refresh
+        </button>
+    </div>
+</div>
+
+<div id="ros-disconnected-banner" class="alert alert-warning {% if ros_state.ros_connected %}d-none{% endif %}">
+    ROS 2 is not connected. The graph is unavailable and topic watching is disabled.
+</div>
+
+<div class="row mb-4">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <div>
+                    <h5 class="mb-0">Topics</h5>
+                    <small class="text-muted">Select topics to watch their latest values and rolling history.</small>
+                </div>
+                <div class="d-flex align-items-center gap-2">
+                    <input id="topic-search" class="form-control form-control-sm" type="search" placeholder="Search topics">
+                    <span id="graph-refresh-time" class="text-muted small">
+                        {% if ros_state.last_graph_refresh %}Updated {{ ros_state.last_graph_refresh }}{% else %}Waiting for graph snapshot{% endif %}
+                    </span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="ros-graph-error" class="alert alert-danger {% if not ros_state.graph_error %}d-none{% endif %}">
+                    {{ ros_state.graph_error or '' }}
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover ros-topic-table">
+                        <thead>
+                            <tr>
+                                <th>Topic</th>
+                                <th>Type</th>
+                                <th class="text-end">Watch</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topic-table-body">
+                            {% for topic in ros_state.topics %}
+                            <tr data-topic-name="{{ topic.name }}">
+                                <td class="ros-topic-name">{{ topic.name }}</td>
+                                <td>{{ topic.types|join(', ') }}</td>
+                                <td class="text-end">
+                                    <button class="btn btn-sm {% if topic.watched %}btn-outline-danger{% else %}btn-outline-primary{% endif %} topic-watch-btn"
+                                            data-topic-name="{{ topic.name }}"
+                                            data-watched="{{ 'true' if topic.watched else 'false' }}">
+                                        {% if topic.watched %}Unwatch{% else %}Watch{% endif %}
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <div id="no-topics-message" class="text-muted {% if ros_state.topics %}d-none{% endif %}">
+                    No ROS topics discovered yet.
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">ROS Nodes</h5>
+            </div>
+            <div class="card-body ros-node-list" id="ros-node-list">
+                {% if ros_state.nodes %}
+                    {% for node in ros_state.nodes %}
+                    <div class="ros-node-entry">
+                        <div class="fw-semibold">{{ node.name }}</div>
+                        <div class="text-muted small">{{ node.namespace }}</div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="text-muted">No ROS nodes discovered yet.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">Watched Topics</h5>
+                <span class="text-muted small">Latest value plus recent sample history</span>
+            </div>
+            <div class="card-body">
+                <div id="watched-topics-grid" class="row g-4">
+                    {% for topic_name, watched in ros_state.watched_topics.items() %}
+                    <div class="col-xl-6 watched-topic-card" data-topic-name="{{ topic_name }}">
+                        <div class="card h-100">
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div>
+                                        <h6 class="mb-1 ros-topic-name">{{ topic_name }}</h6>
+                                        <div class="text-muted small">{{ watched.topic_type or 'Unknown type' }}</div>
+                                    </div>
+                                    <span class="badge {% if watched.status == 'active' %}bg-success{% elif watched.status == 'stale' %}bg-warning text-dark{% elif watched.status == 'error' %}bg-danger{% else %}bg-secondary{% endif %}">
+                                        {{ watched.status }}
+                                    </span>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="small text-muted mb-1">Latest sample</div>
+                                    <pre class="ros-sample-box latest-sample-box">{% if watched.latest and watched.latest.value %}{{ watched.latest.value.pretty }}{% else %}Waiting for samples...{% endif %}</pre>
+                                </div>
+                                <div class="mb-3">
+                                    <div class="small text-muted mb-1">Recent history</div>
+                                    <div class="ros-history-list sample-history-list">
+                                        {% if watched.history %}
+                                            {% for sample in watched.history %}
+                                            <div class="ros-history-item">
+                                                <div class="small text-muted mb-1">{{ sample.timestamp }}</div>
+                                                <pre class="mb-0">{{ sample.value.pretty }}</pre>
+                                            </div>
+                                            {% endfor %}
+                                        {% else %}
+                                            <div class="text-muted small">No samples received yet.</div>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="small text-muted last-update-text">
+                                    {% if watched.last_update %}Last update: {{ watched.last_update }}{% else %}Last update: never{% endif %}
+                                </div>
+                                <div class="alert alert-danger mt-3 mb-0 watch-error {% if not watched.error %}d-none{% endif %}">
+                                    {{ watched.error or '' }}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                <div id="no-watches-message" class="text-muted {% if ros_state.watched_topics %}d-none{% endif %}">
+                    Watch one or more topics to see live values here.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const graphPollIntervalMs = 3000;
+const samplePollIntervalMs = 1000;
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+function samplePrettyText(sample) {
+    if (!sample || !sample.value) {
+        return 'Waiting for samples...';
+    }
+    return sample.value.pretty || sample.value.text || 'Waiting for samples...';
+}
+
+function renderTopicRow(topic) {
+    const watched = topic.watched === true;
+    return `
+        <tr data-topic-name="${escapeHtml(topic.name)}">
+            <td class="ros-topic-name">${escapeHtml(topic.name)}</td>
+            <td>${escapeHtml((topic.types || []).join(', '))}</td>
+            <td class="text-end">
+                <button class="btn btn-sm ${watched ? 'btn-outline-danger' : 'btn-outline-primary'} topic-watch-btn"
+                        data-topic-name="${escapeHtml(topic.name)}"
+                        data-watched="${watched ? 'true' : 'false'}">
+                    ${watched ? 'Unwatch' : 'Watch'}
+                </button>
+            </td>
+        </tr>
+    `;
+}
+
+function renderNodeEntry(node) {
+    return `
+        <div class="ros-node-entry">
+            <div class="fw-semibold">${escapeHtml(node.name)}</div>
+            <div class="text-muted small">${escapeHtml(node.namespace)}</div>
+        </div>
+    `;
+}
+
+function renderHistory(history) {
+    if (!history || history.length === 0) {
+        return '<div class="text-muted small">No samples received yet.</div>';
+    }
+
+    return history.map(sample => `
+        <div class="ros-history-item">
+            <div class="small text-muted mb-1">${escapeHtml(sample.timestamp || 'unknown')}</div>
+            <pre class="mb-0">${escapeHtml(samplePrettyText(sample))}</pre>
+        </div>
+    `).join('');
+}
+
+function renderWatchedCard(topicName, payload) {
+    const status = payload.status || 'idle';
+    const badgeClass =
+        status === 'active' ? 'bg-success' :
+        status === 'stale' ? 'bg-warning text-dark' :
+        status === 'error' ? 'bg-danger' : 'bg-secondary';
+
+    return `
+        <div class="col-xl-6 watched-topic-card" data-topic-name="${escapeHtml(topicName)}">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-start mb-3">
+                        <div>
+                            <h6 class="mb-1 ros-topic-name">${escapeHtml(topicName)}</h6>
+                            <div class="text-muted small">${escapeHtml(payload.topic_type || 'Unknown type')}</div>
+                        </div>
+                        <span class="badge ${badgeClass}">${escapeHtml(status)}</span>
+                    </div>
+                    <div class="mb-3">
+                        <div class="small text-muted mb-1">Latest sample</div>
+                        <pre class="ros-sample-box latest-sample-box">${escapeHtml(samplePrettyText(payload.latest))}</pre>
+                    </div>
+                    <div class="mb-3">
+                        <div class="small text-muted mb-1">Recent history</div>
+                        <div class="ros-history-list sample-history-list">${renderHistory(payload.history)}</div>
+                    </div>
+                    <div class="small text-muted last-update-text">Last update: ${escapeHtml(payload.last_update || 'never')}</div>
+                    <div class="alert alert-danger mt-3 mb-0 watch-error ${payload.error ? '' : 'd-none'}">${escapeHtml(payload.error || '')}</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+async function fetchJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const data = await response.json();
+    if (!response.ok) {
+        throw new Error(data.error || 'Request failed');
+    }
+    return data;
+}
+
+function applySearchFilter() {
+    const searchInput = document.getElementById('topic-search');
+    const query = (searchInput.value || '').toLowerCase();
+    const rows = document.querySelectorAll('#topic-table-body tr');
+    let visibleCount = 0;
+
+    rows.forEach((row) => {
+        const topicName = row.dataset.topicName.toLowerCase();
+        const matches = topicName.includes(query);
+        row.classList.toggle('d-none', !matches);
+        if (matches) {
+            visibleCount += 1;
+        }
+    });
+
+    document.getElementById('no-topics-message').classList.toggle('d-none', visibleCount !== 0);
+}
+
+function bindWatchButtons() {
+    document.querySelectorAll('.topic-watch-btn').forEach((button) => {
+        button.onclick = async () => {
+            const topicName = button.dataset.topicName;
+            const watched = button.dataset.watched === 'true';
+
+            try {
+                if (watched) {
+                    await fetchJson('/api/ros/unwatch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ topic_name: topicName }),
+                    });
+                } else {
+                    await fetchJson('/api/ros/watch', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ topic_name: topicName }),
+                    });
+                }
+                await refreshGraph();
+            } catch (error) {
+                alert(error.message);
+            }
+        };
+    });
+}
+
+async function refreshGraph() {
+    const payload = await fetchJson('/api/ros/graph');
+    document.getElementById('ros-connection-badge').textContent = payload.ros_connected ? 'ROS 2 Connected' : 'ROS 2 Disconnected';
+    document.getElementById('ros-connection-badge').className = `badge ${payload.ros_connected ? 'bg-success' : 'bg-secondary'} ros-status-pill`;
+    document.getElementById('ros-disconnected-banner').classList.toggle('d-none', payload.ros_connected);
+
+    const errorBanner = document.getElementById('ros-graph-error');
+    if (payload.graph_error) {
+        errorBanner.textContent = payload.graph_error;
+        errorBanner.classList.remove('d-none');
+    } else {
+        errorBanner.classList.add('d-none');
+    }
+
+    document.getElementById('graph-refresh-time').textContent = payload.last_graph_refresh
+        ? `Updated ${payload.last_graph_refresh}`
+        : 'Waiting for graph snapshot';
+
+    const topicTableBody = document.getElementById('topic-table-body');
+    topicTableBody.innerHTML = (payload.topics || []).map(renderTopicRow).join('');
+
+    const nodeList = document.getElementById('ros-node-list');
+    nodeList.innerHTML = (payload.nodes || []).length
+        ? payload.nodes.map(renderNodeEntry).join('')
+        : '<div class="text-muted">No ROS nodes discovered yet.</div>';
+
+    const watchedGrid = document.getElementById('watched-topics-grid');
+    const watchedTopics = payload.watched_topics || {};
+    watchedGrid.innerHTML = Object.keys(watchedTopics)
+        .map((topicName) => renderWatchedCard(topicName, watchedTopics[topicName]))
+        .join('');
+
+    document.getElementById('no-topics-message').classList.toggle('d-none', (payload.topics || []).length !== 0);
+    document.getElementById('no-watches-message').classList.toggle('d-none', Object.keys(watchedTopics).length !== 0);
+
+    bindWatchButtons();
+    applySearchFilter();
+}
+
+async function refreshWatchedSamples() {
+    const cards = document.querySelectorAll('.watched-topic-card');
+    await Promise.all(Array.from(cards).map(async (card) => {
+        const topicName = card.dataset.topicName;
+        try {
+            const payload = await fetchJson(`/api/ros/topics/${encodeURIComponent(topicName)}/samples`);
+            card.outerHTML = renderWatchedCard(topicName, payload);
+        } catch (error) {
+            console.error(`Failed to refresh ${topicName}:`, error);
+        }
+    }));
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('refresh-ros-btn').addEventListener('click', refreshGraph);
+    document.getElementById('topic-search').addEventListener('input', applySearchFilter);
+    bindWatchButtons();
+    applySearchFilter();
+
+    setInterval(() => {
+        refreshGraph().catch((error) => console.error('Graph refresh failed:', error));
+    }, graphPollIntervalMs);
+
+    setInterval(() => {
+        refreshWatchedSamples().catch((error) => console.error('Sample refresh failed:', error));
+    }, samplePollIntervalMs);
+});
+</script>
+{% endblock %}

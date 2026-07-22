@@ -4,6 +4,7 @@ Werkzeug==3.0.1
 
 # Environment
 python-dotenv==1.0.1
+docker==7.1.0
 
 # Security
 Flask-HTTPAuth==4.8.0

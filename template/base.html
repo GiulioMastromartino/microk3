@@ -52,7 +52,9 @@
                     <h5><i class="fas fa-server me-2"></i>System Status</h5>
                     <div class="mt-2">
                         <div class="progress" style="height: 10px;">
-                            <div class="progress-bar bg-success" role="progressbar" style="width: 90%"></div>
+                            {% set detected_nodes = system_data.nodes|length if system_data and system_data.nodes is defined else 0 %}
+                            {% set progress = 100 if detected_nodes > 0 else 10 %}
+                            <div class="progress-bar {% if detected_nodes > 0 %}bg-success{% else %}bg-secondary{% endif %}" role="progressbar" style="width: {{ progress }}%"></div>
                         </div>
                     </div>
                 </div>
@@ -65,16 +67,16 @@
                         <a class="nav-link" href="{{ url_for('nodes') }}"><i class="fas fa-server me-2"></i>Nodes</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#"><i class="fas fa-network-wired me-2"></i>Network</a>
+                        <a class="nav-link" href="{{ url_for('network') }}"><i class="fas fa-network-wired me-2"></i>Network</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#"><i class="fas fa-history me-2"></i>Logs</a>
+                        <a class="nav-link" href="{{ url_for('logs') }}"><i class="fas fa-history me-2"></i>Logs</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#"><i class="fas fa-cogs me-2"></i>Configuration</a>
+                        <a class="nav-link" href="{{ url_for('configuration') }}"><i class="fas fa-cogs me-2"></i>Configuration</a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="#"><i class="fas fa-bug me-2"></i>Failures</a>
+                        <a class="nav-link" href="{{ url_for('failures') }}"><i class="fas fa-bug me-2"></i>Failures</a>
                     </li>
                 </ul>
             </div>

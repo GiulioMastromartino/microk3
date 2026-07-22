@@ -40,11 +40,34 @@
                         </div>
                     </div>
                     <div class="col-md-4">
-                        <!-- Placeholder for now, could be dynamic later -->
-                        <h6>Network Latency: <span id="latency-val">12</span>ms</h6>
+                        <h6>Client -> Agent: <span id="client-agent-val">{% if metrics_summary.aggregate.sync_ready and metrics_summary.aggregate.client_to_agent_ms is not none %}{{ "%.3f"|format(metrics_summary.aggregate.client_to_agent_ms) }} ms{% elif metrics_summary.aggregate.sync_ready %}unknown{% else %}syncing{% endif %}</span></h6>
                         <div class="d-flex align-items-center">
                             <span class="status-indicator status-active me-2"></span>
-                            <span>Low Latency</span>
+                            <span>Jitter <span id="client-agent-jitter-val">{{ "%.3f"|format(metrics_summary.aggregate.client_to_agent_jitter_ms or 0) }}</span> ms</span>
+                        </div>
+                        <div class="d-flex align-items-center mt-1">
+                            <span class="status-indicator status-active me-2"></span>
+                            <span>Agent -> ROS 2 <span id="agent-ros-val">{% if metrics_summary.aggregate.agent_to_ros_ms is not none %}{{ "%.3f"|format(metrics_summary.aggregate.agent_to_ros_ms) }} ms{% else %}unknown{% endif %}</span></span>
+                        </div>
+                        <div class="d-flex align-items-center mt-1">
+                            <span class="status-indicator status-active me-2"></span>
+                            <span>Jitter <span id="agent-ros-jitter-val">{{ "%.3f"|format(metrics_summary.aggregate.agent_to_ros_jitter_ms or 0) }}</span> ms</span>
+                        </div>
+                        <div class="d-flex align-items-center mt-1">
+                            <span class="status-indicator status-active me-2"></span>
+                            <span>End-to-End <span id="end-to-end-val">{% if metrics_summary.aggregate.sync_ready and metrics_summary.aggregate.end_to_end_ms is not none %}{{ "%.3f"|format(metrics_summary.aggregate.end_to_end_ms) }} ms{% elif metrics_summary.aggregate.sync_ready %}unknown{% else %}syncing{% endif %}</span></span>
+                        </div>
+                        <div class="d-flex align-items-center mt-1">
+                            <span class="status-indicator status-active me-2"></span>
+                            <span>Jitter <span id="end-to-end-jitter-val">{{ "%.3f"|format(metrics_summary.aggregate.end_to_end_jitter_ms or 0) }}</span> ms</span>
+                        </div>
+                        <div class="d-flex align-items-center mt-1">
+                            <span class="status-indicator status-active me-2"></span>
+                            <span>Bandwidth <span id="bandwidth-val">{{ "%.1f"|format((metrics_summary.aggregate.bandwidth_bps or 0) / 1024) }}</span> KiB/s</span>
+                        </div>
+                        <div class="d-flex align-items-center mt-1">
+                            <span class="status-indicator status-active me-2"></span>
+                            <span id="sync-status">{% if metrics_summary.aggregate.sync_ready %}RTT {{ "%.3f"|format(metrics_summary.aggregate.time_sync_rtt_ms or 0) }} ms | RTT jitter {{ "%.3f"|format(metrics_summary.aggregate.time_sync_rtt_jitter_ms or 0) }} ms{% else %}Clock sync in progress{% endif %}</span>
                         </div>
                     </div>
                 </div>
@@ -180,11 +203,11 @@
                         <ul class="list-group list-group-flush">
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 <span>Heartbeat Interval</span>
-                                <span class="badge bg-primary">100ms</span>
+                                <span class="badge bg-primary">500ms</span>
                             </li>
                             <li class="list-group-item d-flex justify-content-between align-items-center">
                                 <span>Timeout Threshold</span>
-                                <span class="badge bg-primary">500ms</span>
+                                <span class="badge bg-primary">5.0s</span>
                             </li>
                         </ul>
                     </div>
@@ -196,15 +219,14 @@
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    // Resource Usage Chart (Placeholder - would connect to real API data)
     const resourceCtx = document.getElementById('resourceChart').getContext('2d');
-    new Chart(resourceCtx, {
+    const resourceChart = new Chart(resourceCtx, {
         type: 'bar',
         data: {
-            labels: ['CPU Usage', 'Memory Usage', 'Network Usage'],
+            labels: ['CPU %', 'Memory %', 'Network Mbps'],
             datasets: [{
-                label: 'Usage %',
-                data: [65, 42, 30], // TODO: Connect to live data
+                label: 'Live Value',
+                data: [0, 0, 0],
                 backgroundColor: [
                     'rgba(52, 152, 219, 0.7)',
                     'rgba(46, 204, 113, 0.7)',
@@ -223,22 +245,20 @@ document.addEventListener('DOMContentLoaded', function() {
             maintainAspectRatio: false,
             scales: {
                 y: {
-                    beginAtZero: true,
-                    max: 100
+                    beginAtZero: true
                 }
             }
         }
     });
-    
-    // Network Traffic Chart (Placeholder)
+
     const networkCtx = document.getElementById('networkChart').getContext('2d');
-    new Chart(networkCtx, {
+    const networkChart = new Chart(networkCtx, {
         type: 'line',
         data: {
-            labels: ['0s', '10s', '20s', '30s', '40s', '50s', '60s'],
+            labels: [],
             datasets: [{
-                label: 'Traffic (Mbps)',
-                data: [2.4, 3.1, 2.8, 4.2, 3.7, 2.9, 3.5], // TODO: Connect to live data
+                label: 'Bandwidth (Mbps)',
+                data: [],
                 fill: true,
                 backgroundColor: 'rgba(231, 76, 60, 0.2)',
                 borderColor: 'rgba(231, 76, 60, 1)',
@@ -255,6 +275,63 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
     });
+
+    function bpsToMbps(value) {
+        return Number(value || 0) / (1024 * 1024);
+    }
+
+    function updateCharts(summary) {
+        const aggregate = summary.aggregate || {};
+        const history = summary.history || {};
+        const syncReady = Boolean(aggregate.sync_ready);
+
+        document.getElementById('client-agent-val').textContent = syncReady
+            ? (aggregate.client_to_agent_ms == null ? 'unknown' : `${Number(aggregate.client_to_agent_ms).toFixed(3)} ms`)
+            : 'syncing';
+        document.getElementById('client-agent-jitter-val').textContent = Number(aggregate.client_to_agent_jitter_ms || 0).toFixed(3);
+        document.getElementById('agent-ros-val').textContent = aggregate.agent_to_ros_ms == null
+            ? 'unknown'
+            : `${Number(aggregate.agent_to_ros_ms).toFixed(3)} ms`;
+        document.getElementById('agent-ros-jitter-val').textContent = Number(aggregate.agent_to_ros_jitter_ms || 0).toFixed(3);
+        document.getElementById('end-to-end-val').textContent = syncReady
+            ? (aggregate.end_to_end_ms == null ? 'unknown' : `${Number(aggregate.end_to_end_ms).toFixed(3)} ms`)
+            : 'syncing';
+        document.getElementById('end-to-end-jitter-val').textContent = Number(aggregate.end_to_end_jitter_ms || 0).toFixed(3);
+        document.getElementById('bandwidth-val').textContent = ((aggregate.bandwidth_bps || 0) / 1024).toFixed(1);
+        document.getElementById('sync-status').textContent = syncReady
+            ? `RTT ${Number(aggregate.time_sync_rtt_ms || 0).toFixed(3)} ms | RTT jitter ${Number(aggregate.time_sync_rtt_jitter_ms || 0).toFixed(3)} ms`
+            : `Clock sync in progress (${Number(aggregate.time_sync_samples || 0)} samples)`;
+
+        resourceChart.data.datasets[0].data = [
+            Number(aggregate.cpu_percent || 0),
+            Number(aggregate.memory_percent || 0),
+            bpsToMbps(aggregate.bandwidth_bps || 0)
+        ];
+        resourceChart.update();
+
+        const timestamps = history.timestamps || [];
+        const bandwidthHistory = history.bandwidth_bps || [];
+        networkChart.data.labels = timestamps.map((timestamp) => timestamp.slice(11, 19));
+        networkChart.data.datasets[0].data = bandwidthHistory.map((value) => bpsToMbps(value).toFixed(3));
+        networkChart.update();
+    }
+
+    async function refreshMetrics() {
+        try {
+            const response = await fetch('/api/metrics/summary');
+            if (!response.ok) {
+                return;
+            }
+            const summary = await response.json();
+            updateCharts(summary);
+        } catch (error) {
+            console.error('Failed to refresh metrics', error);
+        }
+    }
+
+    updateCharts({{ metrics_summary|tojson }});
+    refreshMetrics();
+    setInterval(refreshMetrics, 2000);
 });
 </script>
 {% endblock %}

@@ -1,59 +1,6 @@
 {
-    "nodes": [
-        {
-            "id": 1,
-            "name": "Node 1",
-            "status": "active",
-            "type": "STM32H743VIT6",
-            "ram": "1MB",
-            "flash": "2MB",
-            "cpu": "480MHz",
-            "active_tasks": ["Motor Control", "Sensor Fusion"],
-            "health_score": 85,
-            "uptime": "12h 34m",
-            "network": "CAN + Ethernet"
-        },
-        {
-            "id": 2,
-            "name": "Node 2",
-            "status": "standby",
-            "type": "STM32H743VIT6",
-            "ram": "1MB",
-            "flash": "2MB",
-            "cpu": "480MHz",
-            "active_tasks": ["Navigation"],
-            "health_score": 92,
-            "uptime": "1d 02h",
-            "network": "CAN + Ethernet"
-        },
-        {
-            "id": 3,
-            "name": "Node 3",
-            "status": "active",
-            "type": "STM32H743VIT6",
-            "ram": "1MB",
-            "flash": "2MB",
-            "cpu": "480MHz",
-            "active_tasks": ["Vision"],
-            "health_score": 78,
-            "uptime": "1d 05h",
-            "network": "CAN + Ethernet"
-        }
-    ],
-    "failures": [
-        {
-            "id": 1,
-            "timestamp": "2026-02-07 14:30:00",
-            "node_id": 1,
-            "description": "Node 1 reported as offline. Failover in progress.",
-            "status": "resolved"
-        }
-    ],
-    "system_status": "active",
-    "tasks": {
-        "Motor Control": {"node_id": 1, "status": "running"},
-        "Sensor Fusion": {"node_id": 1, "status": "running"},
-        "Navigation": {"node_id": 2, "status": "running"},
-        "Vision": {"node_id": 3, "status": "running"}
-    }
+    "nodes": [],
+    "failures": [],
+    "system_status": "waiting_for_nodes",
+    "tasks": {}
 }

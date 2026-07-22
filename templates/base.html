@@ -37,6 +37,12 @@
                             </a>
                         </li>
                         <li class="nav-item">
+                            <a class="nav-link {% if request.path == '/ros' %}active{% endif %}" href="/ros">
+                                <i class="fas fa-wave-square me-2"></i>
+                                ROS 2
+                            </a>
+                        </li>
+                        <li class="nav-item">
                             <a class="nav-link {% if request.path == '/network' %}active{% endif %}" href="/network">
                                 <i class="fas fa-network-wired me-2"></i>
                                 Network

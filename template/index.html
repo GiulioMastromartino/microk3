@@ -5,79 +5,45 @@
     <h2><i class="fas fa-tachometer-alt me-2"></i>System Dashboard</h2>
 </div>
 
-<!-- System Status Card -->
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card">
-            <div class="card-body">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="card-title">System Status</h5>
-                    <div class="system-status active">
-                        <i class="fas fa-circle me-1"></i> Active
-                    </div>
-                </div>
-                <p class="card-text">System operating normally with graceful degradation capability</p>
-                <div class="row">
-                    <div class="col-md-4">
-                        <h6>Nodes Online: 3/3</h6>
-                        <div class="d-flex align-items-center">
-                            <span class="status-indicator status-active me-2"></span>
-                            <span>Active Nodes</span>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <h6>Tasks Running: 4/4</h6>
-                        <div class="d-flex align-items-center">
-                            <span class="status-indicator status-active me-2"></span>
-                            <span>Active Tasks</span>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <h6>Network Latency: 12ms</h6>
-                        <div class="d-flex align-items-center">
-                            <span class="status-indicator status-active me-2"></span>
-                            <span>Low Latency</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
+{% set total_nodes = system_data.nodes|length %}
+{% set active_nodes = system_data.nodes|selectattr('status', 'equalto', 'active')|list|length %}
+{% set latest_failure = system_data.failures[-1] if system_data.failures else None %}
 
-<!-- Failover Alert -->
 <div class="row mb-4">
-    <div class="col-md-12">
-        <div class="failover-indicator">
-            <i class="fas fa-exclamation-triangle"></i>
-            <span>Node 1 reported as offline. Failover in progress. Task A has been migrated to Node 2.</span>
-        </div>
-    </div>
-</div>
-
-<!-- Charts Section -->
-<div class="row mb-4">
-    <div class="col-md-6">
+    <div class="col-md-4">
         <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">System Resource Usage</h5>
-            </div>
             <div class="card-body">
-                <div class="chart-container">
-                    <canvas id="resourceChart"></canvas>
-                </div>
+                <h5 class="card-title">System Status</h5>
+                <p class="display-6 mb-1">{{ system_data.system_status|replace('_', ' ')|title }}</p>
+                <p class="text-muted mb-0">
+                    {% if ros_connected %}
+                    Reading live ROS 2 node discovery
+                    {% else %}
+                    Waiting for ROS 2 connection
+                    {% endif %}
+                </p>
             </div>
         </div>
     </div>
-    <div class="col-md-6">
+    <div class="col-md-4">
         <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Network Traffic</h5>
-            </div>
             <div class="card-body">
-                <div class="chart-container">
-                    <canvas id="networkChart"></canvas>
-                </div>
+                <h5 class="card-title">Detected Nodes</h5>
+                <p class="display-6 mb-1">{{ total_nodes }}</p>
+                <p class="text-muted mb-0">{{ active_nodes }} active</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-body">
+                <h5 class="card-title">Latest Alert</h5>
+                {% if latest_failure %}
+                <p class="mb-1">{{ latest_failure.description }}</p>
+                <p class="text-muted mb-0">Node {{ latest_failure.node_id }} at {{ latest_failure.timestamp }}</p>
+                {% else %}
+                <p class="text-muted mb-0">No node alerts received.</p>
+                {% endif %}
             </div>
         </div>
     </div>
@@ -91,6 +57,7 @@
 </div>
 
 <div class="row">
+    {% if system_data.nodes %}
     {% for node in system_data.nodes %}
     <div class="col-md-4">
         <div class="card node-card {% if node.status == 'active' %}active-node{% elif node.status == 'standby' %}standby-node{% else %}error-node{% endif %}">
@@ -123,118 +90,50 @@
         </div>
     </div>
     {% endfor %}
-</div>
-
-<!-- System Configuration -->
-<div class="row mt-4">
+    {% else %}
     <div class="col-md-12">
         <div class="card">
+            <div class="card-body">
+                <p class="mb-0 text-muted">No nodes detected yet. The dashboard will populate when live ROS 2 heartbeat messages arrive.</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <div class="card">
             <div class="card-header">
-                <h5><i class="fas fa-cogs me-2"></i>System Configuration</h5>
+                <h5><i class="fas fa-network-wired me-2"></i>Runtime</h5>
             </div>
             <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6">
-                        <h6>Network Configuration</h6>
-                        <ul class="list-group list-group-flush">
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>CAN Bus</span>
-                                <span class="badge bg-success">Active</span>
-                            </li>
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>Ethernet</span>
-                                <span class="badge bg-success">Active</span>
-                            </li>
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>ROS2 DDS</span>
-                                <span class="badge bg-success">Active</span>
-                            </li>
-                        </ul>
-                    </div>
-                    <div class="col-md-6">
-                        <h6>Failover Settings</h6>
-                        <ul class="list-group list-group-flush">
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>Heartbeat Interval</span>
-                                <span class="badge bg-primary">100ms</span>
-                            </li>
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>Timeout Threshold</span>
-                                <span class="badge bg-primary">500ms</span>
-                            </li>
-                            <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span>Failover Priority</span>
-                                <span class="badge bg-primary">Node 1 &gt; Node 2 &gt; Node 3</span>
-                            </li>
-                        </ul>
-                    </div>
-                </div>
+                <ul class="list-group list-group-flush">
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>ROS 2</span>
+                        <span class="badge {% if ros_connected %}bg-success{% else %}bg-secondary{% endif %}">{% if ros_connected %}Connected{% else %}Disconnected{% endif %}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>Recorded Failures</span>
+                        <span class="badge bg-primary">{{ system_data.failures|length }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between align-items-center">
+                        <span>Tracked Tasks</span>
+                        <span class="badge bg-primary">{{ system_data.tasks|length }}</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5><i class="fas fa-info-circle me-2"></i>Data Source</h5>
+            </div>
+            <div class="card-body">
+                <p class="mb-0 text-muted">This dashboard no longer seeds demo nodes. Visible nodes come only from live ROS 2 discovery and heartbeat traffic.</p>
             </div>
         </div>
     </div>
 </div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    // Resource Usage Chart
-    const resourceCtx = document.getElementById('resourceChart').getContext('2d');
-    new Chart(resourceCtx, {
-        type: 'bar',
-        data: {
-            labels: ['CPU Usage', 'Memory Usage', 'Network Usage'],
-            datasets: [{
-                label: 'Usage %',
-                data: [65, 42, 30],
-                backgroundColor: [
-                    'rgba(52, 152, 219, 0.7)',
-                    'rgba(46, 204, 113, 0.7)',
-                    'rgba(241, 196, 15, 0.7)'
-                ],
-                borderColor: [
-                    'rgba(52, 152, 219, 1)',
-                    'rgba(46, 204, 113, 1)',
-                    'rgba(241, 196, 15, 1)'
-                ],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100
-                }
-            }
-        }
-    });
-    
-    // Network Traffic Chart
-    const networkCtx = document.getElementById('networkChart').getContext('2d');
-    new Chart(networkCtx, {
-        type: 'line',
-        data: {
-            labels: ['0s', '10s', '20s', '30s', '40s', '50s', '60s'],
-            datasets: [{
-                label: 'Traffic (Mbps)',
-                data: [2.4, 3.1, 2.8, 4.2, 3.7, 2.9, 3.5],
-                fill: true,
-                backgroundColor: 'rgba(231, 76, 60, 0.2)',
-                borderColor: 'rgba(231, 76, 60, 1)',
-                tension: 0.3
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true
-                }
-            }
-        }
-    });
-});
-</script>
 {% endblock %}

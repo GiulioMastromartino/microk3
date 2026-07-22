@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MicroK3 v2.0 — Full Redesign Plan</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --surface: #1a2028;
+    --surface-2: #232c38;
+    --border: #2d3a4a;
+    --text: #e6edf3;
+    --text-dim: #8b98a8;
+    --accent: #58a6ff;
+    --accent-2: #7ee787;
+    --warn: #f0883e;
+    --danger: #ff7b72;
+    --purple: #bc8cff;
+    --code-bg: #11161d;
+    --mono: "SF Mono", "Fira Code", "Cascadia Code", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  .layout { display: flex; min-height: 100vh; }
+
+  /* Sidebar */
+  nav.toc {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    padding: 28px 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+  nav.toc .brand {
+    padding: 0 24px 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  nav.toc .brand h1 { font-size: 18px; margin: 0 0 4px; color: var(--accent); }
+  nav.toc .brand .ver { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  nav.toc ol { list-style: none; padding: 0; margin: 0; counter-reset: toc; }
+  nav.toc ol > li { counter-increment: toc; }
+  nav.toc ol > li > a {
+    display: block;
+    padding: 7px 24px;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 13.5px;
+    border-left: 3px solid transparent;
+    transition: all .15s;
+  }
+  nav.toc ol > li > a::before { content: counter(toc) ". "; opacity: .6; }
+  nav.toc ol > li > a:hover { color: var(--text); background: var(--surface-2); border-left-color: var(--accent); }
+  nav.toc ol ol { padding-left: 0; counter-reset: sub; }
+  nav.toc ol ol li { counter-increment: sub; }
+  nav.toc ol ol li a { font-size: 12.5px; padding: 5px 24px 5px 40px; }
+  nav.toc ol ol li a::before { content: counter(toc) "." counter(sub) " "; }
+
+  /* Main */
+  main { flex: 1; max-width: 980px; padding: 48px 56px 120px; }
+  h1.title { font-size: 38px; margin: 0 0 8px; line-height: 1.15; letter-spacing: -0.02em; }
+  .subtitle { color: var(--text-dim); font-size: 17px; margin: 0 0 8px; }
+  .meta { display: flex; gap: 8px; flex-wrap: wrap; margin: 20px 0 32px; padding-bottom: 24px; border-bottom: 1px solid var(--border); }
+  .badge { font-family: var(--mono); font-size: 11.5px; padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border); color: var(--text-dim); }
+  .badge.blue { color: var(--accent); border-color: rgba(88,166,255,.4); background: rgba(88,166,255,.08); }
+  .badge.green { color: var(--accent-2); border-color: rgba(126,231,135,.4); background: rgba(126,231,135,.08); }
+  .badge.purple { color: var(--purple); border-color: rgba(188,140,255,.4); background: rgba(188,140,255,.08); }
+
+  h2 { font-size: 27px; margin: 52px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--border); letter-spacing: -0.01em; scroll-margin-top: 20px; }
+  h2 .num { color: var(--accent); font-family: var(--mono); font-size: 18px; margin-right: 10px; }
+  h3 { font-size: 19px; margin: 32px 0 12px; color: var(--text); scroll-margin-top: 20px; }
+  h4 { font-size: 16px; margin: 22px 0 10px; color: var(--accent); font-family: var(--mono); }
+  p { margin: 0 0 14px; }
+  a { color: var(--accent); }
+
+  ul, ol { padding-left: 22px; margin: 0 0 16px; }
+  li { margin-bottom: 6px; }
+  li::marker { color: var(--text-dim); }
+  strong { color: #fff; }
+  code { font-family: var(--mono); background: var(--code-bg); padding: 2px 6px; border-radius: 5px; font-size: 13px; color: var(--purple); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; overflow-x: auto; margin: 14px 0; font-size: 13px; line-height: 1.55; }
+  pre code { background: none; padding: 0; color: var(--text); font-size: 13px; }
+  .kw { color: var(--purple); }
+  .str { color: var(--accent-2); }
+  .com { color: var(--text-dim); font-style: italic; }
+  .fn { color: var(--accent); }
+  .num-l { color: var(--warn); }
+
+  /* Callouts */
+  .callout { border-radius: 10px; padding: 16px 20px; margin: 18px 0; border-left: 4px solid; }
+  .callout .head { font-weight: 700; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+  .callout.warn { background: rgba(240,136,62,.08); border-color: var(--warn); }
+  .callout.warn .head { color: var(--warn); }
+  .callout.danger { background: rgba(255,123,114,.08); border-color: var(--danger); }
+  .callout.danger .head { color: var(--danger); }
+  .callout.info { background: rgba(88,166,255,.08); border-color: var(--accent); }
+  .callout.info .head { color: var(--accent); }
+  .callout.ok { background: rgba(126,231,135,.08); border-color: var(--accent-2); }
+  .callout.ok .head { color: var(--accent-2); }
+  .callout p:last-child { margin-bottom: 0; }
+
+  /* Tables */
+  .table-wrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--border); border-radius: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { padding: 11px 16px; text-align: left; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { background: var(--surface); color: var(--accent); font-family: var(--mono); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  td code { font-size: 12px; }
+  .pill { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+  .pill.keep { color: var(--accent-2); background: rgba(126,231,135,.12); }
+  .pill.refactor { color: var(--warn); background: rgba(240,136,62,.12); }
+  .pill.new { color: var(--accent); background: rgba(88,166,255,.12); }
+  .pill.drop { color: var(--danger); background: rgba(255,123,114,.12); }
+
+  /* Diagrams */
+  .diagram { background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 24px; overflow-x: auto; margin: 18px 0; font-family: var(--mono); font-size: 13px; line-height: 1.5; white-space: pre; color: var(--text); }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+  .card h4 { margin-top: 0; }
+  .card .tag { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+
+  .phase { display: flex; gap: 16px; align-items: flex-start; margin: 16px 0; }
+  .phase-num { flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--bg); display: flex; align-items: center; justify-content: center; font-weight: 700; font-family: var(--mono); }
+  .phase-body { flex: 1; }
+  .phase-body h4 { margin: 4px 0 4px; color: var(--text); }
+  .phase-body .dur { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+  .footer { margin-top: 60px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--text-dim); font-size: 13px; }
+  @media (max-width: 860px) { nav.toc { display: none; } main { padding: 32px 24px; } .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="layout">
+
+<nav class="toc">
+  <div class="brand">
+    <h1>◆ MicroK3</h1>
+    <div class="ver">v0.2.1 → v2.0 redesign</div>
+  </div>
+  <ol>
+    <li><a href="#summary">Executive Summary</a></li>
+    <li><a href="#current">Current State</a>
+      <ol>
+        <li><a href="#what-it-does">What MicroK3 is</a></li>
+        <li><a href="#pain">Pain points</a></li>
+      </ol>
+    </li>
+    <li><a href="#principles">Principles &amp; Goals</a></li>
+    <li><a href="#architecture">Target Architecture</a></li>
+    <li><a href="#backend">Backend Redesign</a></li>
+    <li><a href="#ros">ROS Integration Layer</a></li>
+    <li><a href="#bridge">Bridge Refactor</a></li>
+    <li><a href="#realtime">Real-Time Transport</a></li>
+    <li><a href="#frontend">Frontend Strategy</a></li>
+    <li><a href="#api">API &amp; Data Model</a></li>
+    <li><a href="#observability">Observability</a></li>
+    <li><a href="#security">Security</a></li>
+    <li><a href="#structure">Directory Structure</a></li>
+    <li><a href="#migration">Migration Plan</a></li>
+    <li><a href="#stack">Tech Stack Decisions</a></li>
+    <li><a href="#testing">Testing Strategy</a></li>
+    <li><a href="#risks">Risks &amp; Mitigations</a></li>
+    <li><a href="#timeline">Timeline</a></li>
+  </ol>
+</nav>
+
+<main>
+
+<h1 class="title">MicroK3 v2.0 — Full Redesign Plan</h1>
+<p class="subtitle">From a monolithic Flask dashboard to a modular, real-time micro-ROS control &amp; monitoring platform.</p>
+<div class="meta">
+  <span class="badge blue">Document type: Design RFC</span>
+  <span class="badge">Status: For review</span>
+  <span class="badge green">Scope: microrosWs/microk3</span>
+  <span class="badge">Date: 2026-06-25</span>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="summary"><span class="num">1</span>Executive Summary</h2>
+
+<p>MicroK3 today is a single <code>app.py</code> (~1,080 lines) that bundles Flask routing, global mutable
+state, ROS-update dispatch, metrics serialization, auth, and persistence into one module. It works —
+nodes are discovered, heartbeats are processed, latency is measured, and a dashboard renders — but the
+monolith has reached the point where every new feature (more node types, real-time push, persistence
+beyond a JSON file, multi-user) fights the existing structure.</p>
+
+<p>This document proposes a <strong>full but incremental redesign</strong> to <strong>v2.0</strong>, guided by three moves:</p>
+
+<div class="grid-3">
+  <div class="card">
+    <h4>① Decompose</h4>
+    <p class="tag">monolith → layers</p>
+    <p>Split <code>app.py</code> into an application factory, Blueprints, a typed <strong>StateStore</strong>,
+       a <strong>ROS service</strong>, and a <strong>persistence</strong> layer. No business logic in route handlers.</p>
+  </div>
+  <div class="card">
+    <h4>② Push, don't poll</h4>
+    <p class="tag">setInterval → SSE/WS</p>
+    <p>Replace the 1–3&nbsp;s polling loops with a real-time transport (Server-Sent Events first,
+       WebSocket optional) so the dashboard reflects node state the instant ROS publishes it.</p>
+  </div>
+  <div class="card">
+    <h4>③ Formalize contracts</h4>
+    <p class="tag">dicts → typed models</p>
+    <p>Replace ad-hoc dicts crossing the ROS↔Flask boundary with Pydantic/dataclass <strong>events</strong>,
+       a schema'd <strong>persistence</strong> layer (SQLite), and an <strong>OpenAPI</strong>-documented API.</p>
+  </div>
+</div>
+
+<div class="callout info">
+  <div class="head">⓵ What stays</div>
+  <p>The <strong>ROS topic contract</strong> (<code>microk3/node_status</code>, <code>microk3/system_alerts</code>,
+     <code>microk3/performance_metrics</code>, <code>microk3/commands</code>), the <strong>micro-ROS agent</strong> deployment,
+     the <strong>time-sync / latency math</strong> in the Renode bridge, and the overall product UX. The redesign is about
+     <em>how the backend is organized and how data moves</em>, not rewriting the embedded protocol.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="current"><span class="num">2</span>Current State</h2>
+
+<h3 id="what-it-does">2.1 What MicroK3 is</h3>
+<p>A Flask 3.0 + <code>rclpy</code> service, containerized with the micro-ROS agent and a Renode simulation
+bridge, that:</p>
+<ul>
+  <li><strong>Discovers</strong> STM32 micro-ROS nodes via heartbeat messages on <code>microk3/node_status</code>.</li>
+  <li><strong>Measures</strong> client→agent→ROS latency, jitter, bandwidth, and clock-sync offset (the heavy lifting lives in <code>tools/renode_heartbeat_bridge.py</code>, ~690 lines).</li>
+  <li><strong>Surfaces</strong> everything through server-rendered Bootstrap templates + a polling JS layer + a read-mostly REST API.</li>
+  <li><strong>Inspects</strong> the live ROS graph and lets operators watch arbitrary topics dynamically.</li>
+</ul>
+
+<h4>Component inventory</h4>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>File</th><th>LOC</th><th>Responsibility</th><th>v2.0 fate</th></tr></thead>
+  <tbody>
+    <tr><td><code>app.py</code></td><td>1,080</td><td>Everything: routes, state, ROS dispatch, auth, persistence, serialization</td><td><span class="pill refactor">split</span></td></tr>
+    <tr><td><code>ros_interface.py</code></td><td>273</td><td><code>MicroK3RosNode</code> + <code>ROS2Manager</code> thread wrapper</td><td><span class="pill keep">keep, isolate</span></td></tr>
+    <tr><td><code>metrics.py</code></td><td>338</td><td><code>DockerStatsCollector</code> thread + metrics merge/history</td><td><span class="pill refactor">refactor</span></td></tr>
+    <tr><td><code>models/node.py</code></td><td>86</td><td><code>Node</code> dataclass</td><td><span class="pill refactor">extend</span></td></tr>
+    <tr><td><code>tools/renode_heartbeat_bridge.py</code></td><td>688</td><td>Time-sync, heartbeat watchdog, latency telemetry</td><td><span class="pill refactor">decompose</span></td></tr>
+    <tr><td><code>config.py</code></td><td>86</td><td>Flask config classes</td><td><span class="pill keep">keep</span></td></tr>
+    <tr><td><code>templates/*</code></td><td>7 pages</td><td>Bootstrap server-rendered UI</td><td><span class="pill refactor">evolve</span></td></tr>
+    <tr><td><code>template/*</code></td><td>3 files</td><td><strong>Stale duplicate</strong> of templates/</td><td><span class="pill drop">delete</span></td></tr>
+    <tr><td><code>data/system_data.json</code></td><td>—</td><td>Persistence (explicitly ignored on load today)</td><td><span class="pill new">replace w/ SQLite</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3 id="pain">2.2 Pain points (the "why")</h3>
+<div class="grid-2">
+  <div class="card">
+    <h4>Architecture</h4>
+    <ul>
+      <li><strong>God module.</strong> <code>app.py</code> owns routing + global state + a 140-line <code>ros_update_callback</code> switch.</li>
+      <li><strong>Global mutable dict</strong> <code>system_data</code> read/written from the ROS thread, the Docker thread, and request handlers under a mix of locks — race-prone.</li>
+      <li><strong>No service boundary</strong> between "ingest ROS events" and "serve HTTP".</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Real-time UX</h4>
+    <ul>
+      <li><strong>Polling everywhere</strong>: 2&nbsp;s for metrics, 1&nbsp;s for topic samples, 3&nbsp;s for graph — 3 concurrent loops per open tab.</li>
+      <li><strong>No push.</strong> Failures &amp; offline transitions appear only on next poll.</li>
+      <li>Full re-render of watched-topic cards every second.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Data &amp; correctness</h4>
+    <ul>
+      <li><strong>Persistence is effectively dead</strong> — <code>load_system_data()</code> deliberately ignores the JSON file. State is lost on restart.</li>
+      <li><strong>Stringly-typed latencies</strong> like <code>"C->A 3.200 ms | A->ROS ..."</code> baked onto the <code>Node</code> model for the template.</li>
+      <li><strong>Failure IDs</strong> = <code>len(list)+1</code> → collisions after deletes.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Operability</h4>
+    <ul>
+      <li><strong>Node logs = regex over a flat log file</strong> (<code>get_node_log_lines</code>) — doesn't scale, no rotation awareness.</li>
+      <li><strong>Single hardcoded admin</strong> in env vars; no roles, no audit trail for who changed what.</li>
+      <li><strong>No health depth</strong> — <code>/health</code> is a static "healthy"; no readiness vs. ROS connectivity.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="callout warn">
+  <div class="head">⚠ Not a rewrite-from-scratch</div>
+  <p>The embedded firmware, the ROS message contract, and the bridge's clock-sync algorithm are <strong>valuable and correct</strong>.
+     The redesign reuses them verbatim and only re-houses the Python backend. Goal: ship incrementally with a working dashboard at every step.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="principles"><span class="num">3</span>Principles &amp; Goals</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>Design principles</h4>
+    <ol>
+      <li><strong>One responsibility per module.</strong> Route handlers validate &amp; delegate; they never mutate shared state directly.</li>
+      <li><strong>Typed boundaries.</strong> Events crossing the ROS↔HTTP boundary are validated dataclasses/Pydantic models, not bare dicts.</li>
+      <li><strong>Single source of truth.</strong> A <code>StateStore</code> owns all runtime state behind one locked façade.</li>
+      <li><strong>Push first.</strong> New data flows to clients via events; polling endpoints remain for compatibility only.</li>
+      <li><strong>Configurable, not hardcoded.</strong> Watch limits, intervals, history sizes move to config.</li>
+      <li><strong>Testable in isolation.</strong> Every layer runs without ROS / Docker / hardware.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h4>Concrete goals (v2.0)</h4>
+    <ul>
+      <li>Sub-second event propagation ROS → browser.</li>
+      <li>State survives container restart (SQLite-backed).</li>
+      <li>Pluggable node/bridge <em>adapters</em> (STM32 hardware, Renode, future boards) behind one interface.</li>
+      <li>OpenAPI-documented API + Swagger UI.</li>
+      <li>Structured JSON logging; per-node structured event log.</li>
+      <li>≥80% unit-test coverage of non-ROS logic.</li>
+      <li>Same Docker UX (<code>docker compose up</code>), zero firmware changes.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="architecture"><span class="num">4</span>Target Architecture</h2>
+
+<p>Four horizontal layers, with events flowing top-to-bottom and queries bottom-to-top:</p>
+
+<div class="diagram">┌──────────────────────────────────────────────────────────────────────┐
+│  TRANSPORT LAYER   Flask app factory + Blueprints (HTTP/REST/SSE)     │
+│  web.py · api.py · sse.py · auth.py                                   │
+└───────────────▲───────────────────────────────▲──────────────────────┘
+                │ queries                        │ subscribe (events)
+┌───────────────┴───────────────────────────────┴──────────────────────┐
+│  APPLICATION CORE   StateStore (single locked façade)  ·  EventBus    │
+│  Owns: nodes, failures, metrics, ros-graph, watchers                  │
+│  Emits: NodeChanged, FailureLogged, MetricsUpdated, TopicSample …     │
+└───────────────▲───────────────────────────────▲──────────────────────┘
+                │ typed events                   │ typed events
+┌───────────────┴───────────────┐   ┌────────────┴─────────────────────┐
+│  ROS ADAPTERS                 │   │  HOST ADAPTERS                    │
+│  ros_service.py (rclpy)       │   │  docker_stats.py  ·  bridge_*     │
+│  → publishes commands         │   │  (Renode heartbeat / time-sync)   │
+│  ← subscribes telemetry       │   │                                   │
+└───────────────▲───────────────┘   └────────────▲─────────────────────┘
+                │ rclpy topics                     │ rclpy topics
+┌───────────────┴──────────────────────────────────┴───────────────────┐
+│  PERSISTENCE   SQLite (nodes, failures, metrics ringbuf) + config     │
+└──────────────────────────────────────────────────────────────────────┘
+              ▲                                    ▲
+        micro-ROS agent (UDP 8888)            Renode / hardware
+</div>
+
+<div class="callout ok">
+  <div class="head">⓶ The key invariant</div>
+  <p>Only the <strong>StateStore</strong> mutates runtime state. Adapters <em>ingest events</em>; transport layers <em>read snapshots</em> or
+     <em>subscribe to an EventBus</em>. No route handler ever touches <code>system_data</code> directly — eliminating the current locking jumble.</p>
+</div>
+
+<h3>4.1 Request vs. event flow (example: heartbeat arrives)</h3>
+<div class="diagram">ROS "microk3/node_status" msg
+   │
+   ▼
+ROS adapter parses → NodeStatusEvent(id, status, health, uptime, metrics)
+   │
+   ▼
+StateStore.apply(NodeStatusEvent)
+   ├─ upsert Node  (discovers if new)
+   ├─ recompute system_status
+   ├─ persist to SQLite (debounced)
+   └─ EventBus.publish(NodeChangedEvent{node, prev_status})
+                                        │
+                                        ▼
+                   SSE hub fans out → every open browser tab
+                                        │
+                                        ▼
+                   JS merges patch into local store → surgical DOM update</div>
+
+<!-- ============================================================ -->
+<h2 id="backend"><span class="num">5</span>Backend Redesign</h2>
+
+<h3>5.1 Application factory + Blueprints</h3>
+<p>Replace the module-level side effects in <code>app.py</code> with a factory. This makes testing, multiple configs,
+and WSGI servers (gunicorn) first-class — and fixes the latent bug where the ROS thread only starts in
+<code>__main__</code> (today, running under gunicorn silently skips ROS).</p>
+
+<pre><code><span class="com"># microk3/app_factory.py</span>
+<span class="kw">def</span> <span class="fn">create_app</span>(config_name=<span class="str">"development"</span>):
+    app = Flask(__name__, template_folder=<span class="str">"templates"</span>)
+    app.config.from_object(get_config(config_name))
+
+    <span class="com"># Single shared core</span>
+    store   = StateStore(persistence=SqliteStore(app.config[<span class="str">"DB_PATH"</span>]))
+    bus     = EventBus()
+    ros     = RosService(store=store, bus=bus)
+    metrics = HostMetricsService(store=store, bus=bus)
+
+    app.extensions.update(store=store, bus=bus, ros=ros, metrics=metrics)
+
+    app.register_blueprint(web_bp)          <span class="com"># server-rendered pages</span>
+    app.register_blueprint(api_bp)           <span class="com"># /api/* (OpenAPI)</span>
+    app.register_blueprint(sse_bp)           <span class="com"># /events SSE stream</span>
+    app.register_blueprint(auth_bp)          <span class="com"># /login, sessions, roles</span>
+
+    <span class="fn">register_lifecycle</span>(app, ros, metrics)   <span class="com"># start/stop on app context</span>
+    <span class="kw">return</span> app</code></pre>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Blueprint</th><th>Routes</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>web_bp</code></td><td><code>/</code>, <code>/nodes</code>, <code>/ros</code>, <code>/network</code>, <code>/failures</code>, <code>/logs</code>, <code>/configuration</code></td><td>Server-rendered; can thin out as SPA grows</td></tr>
+    <tr><td><code>api_bp</code> (<code>/api</code>)</td><td>REST endpoints below</td><td>Auto OpenAPI schema; read-mostly</td></tr>
+    <tr><td><code>sse_bp</code> (<code>/events</code>)</td><td>Server-Sent Events stream</td><td>Subscribes to <code>EventBus</code>; one conn/tab</td></tr>
+    <tr><td><code>auth_bp</code></td><td><code>/login</code>, <code>/logout</code></td><td>Session-based; replaces HTTPBasicAuth</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>5.2 The StateStore (single source of truth)</h3>
+<p>A thread-safe façade replacing the global <code>system_data</code> dict and the scattered <code>ros_state_lock</code> usages.
+It takes <strong>typed events in</strong> and yields <strong>immutable snapshots out</strong>.</p>
+
+<pre><code><span class="kw">@dataclass</span>(frozen=<span class="kw">True</span>)
+<span class="kw">class</span> <span class="fn">SystemSnapshot</span>:
+    nodes:    tuple[Node, ...]
+    failures: tuple[Failure, ...]
+    status:   SystemStatus
+    metrics:  MetricsSnapshot
+    ros:      RosGraphSnapshot
+    updated_at: datetime
+
+<span class="kw">class</span> <span class="fn">StateStore</span>:
+    <span class="kw">def</span> <span class="fn">apply</span>(self, evt: Event) -&gt; list[Event]:
+        <span class="com"># one RLock; validates, mutates, persists (debounced), returns derived events</span>
+    <span class="kw">def</span> <span class="fn">snapshot</span>(self) -&gt; SystemSnapshot: ...     <span class="com"># deep, frozen copy for readers</span>
+    <span class="kw">def</span> <span class="fn">watch</span>(self, topic) -&gt; Result: ...          <span class="com"># delegates to RosService</span></code></pre>
+
+<div class="callout info">
+  <div class="head">Why immutable snapshots?</div>
+  <p>Templates and SSE serializers receive a frozen copy they can iterate freely — no lock held during rendering,
+     no risk of a half-updated dict leaking into JSON. This alone removes the most fragile pattern in the current code.</p>
+</div>
+
+<h3>5.3 Persistence (SQLite)</h3>
+<p>Replace the dead JSON file with a tiny SQLite DB (zero-ops, file-based, in-volume). Two goals: survive restarts,
+and give failures/tasks real primary keys.</p>
+<pre><code><span class="kw">CREATE TABLE</span> nodes (
+    id <span class="kw">INTEGER PRIMARY KEY</span>, name <span class="kw">TEXT</span>, type <span class="kw">TEXT</span>,
+    status <span class="kw">TEXT</span>, health <span class="kw">INTEGER</span>, first_seen <span class="kw">TEXT</span>, last_seen <span class="kw">TEXT</span>);
+<span class="kw">CREATE TABLE</span> failures (
+    id <span class="kw">INTEGER PRIMARY KEY AUTOINCREMENT</span>,
+    node_id <span class="kw">INTEGER</span>, ts <span class="kw">TEXT</span>, level <span class="kw">TEXT</span>, description <span class="kw">TEXT</span>);
+<span class="kw">CREATE TABLE</span> metric_samples (   <span class="com">-- ring buffer, pruned by age</span>
+    ts <span class="kw">TEXT</span>, node_id <span class="kw">INTEGER</span>, payload <span class="kw">TEXT</span>);</code></pre>
+<p>Metrics history is already a bounded ring in memory; SQLite just persists the latest snapshot periodically so the
+   dashboard doesn't start empty after a restart. Node/failure tables are authoritative.</p>
+
+<!-- ============================================================ -->
+<h2 id="ros"><span class="num">6</span>ROS Integration Layer</h2>
+
+<p>The current <code>ros_interface.py</code> is the cleanest part of the codebase — it stays, but gains a typed contract
+and is wrapped by a thin <code>RosService</code> that talks to the <code>StateStore</code> instead of a raw callback.</p>
+
+<h3>6.1 Replace the callback switch with typed events</h3>
+<p>Today, <code>ros_update_callback(action, data)</code> is a 140-line <code>if/elif</code> over string actions.
+v2.0 makes the <code>RosService</code> emit the specific <code>Event</code> types the <code>StateStore</code> already understands:</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Today (string action)</th><th>v2.0 typed event</th><th>Handler</th></tr></thead>
+  <tbody>
+    <tr><td><code>'update_node'</code></td><td><code>NodeStatusEvent</code></td><td><code>StateStore.apply</code></td></tr>
+    <tr><td><code>'add_failure'</code></td><td><code>FailureEvent</code></td><td><code>StateStore.apply</code></td></tr>
+    <tr><td><code>'raw_heartbeat'</code></td><td><code>RawHeartbeatEvent</code></td><td>structured logger</td></tr>
+    <tr><td><code>'performance_metrics'</code></td><td><code>MetricsEvent</code></td><td><code>StateStore.apply</code></td></tr>
+    <tr><td><code>'graph_snapshot'</code> / <code>'topic_sample'</code> / <code>'watch_*'</code></td><td><code>GraphEvent</code> / <code>TopicSampleEvent</code> / <code>WatchEvent</code></td><td><code>StateStore.apply</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>6.2 Bridge ↔ Dashboard contract stays identical</h3>
+<p>The <code>microk3/*</code> topics remain the wire format. The <code>RosService</code> still subscribes to
+<code>microk3/node_status</code>, <code>microk3/system_alerts</code>, <code>microk3/performance_metrics</code> and publishes
+<code>microk3/commands</code>. <strong>No firmware change required.</strong></p>
+
+<h3>6.3 Graceful degradation</h3>
+<p><code>rclpy</code> import is already optional; <code>RosService</code> formalizes a <code>NullRosService</code> stand-in so the whole
+   app runs (and most tests run) without ROS installed.</p>
+
+<!-- ============================================================ -->
+<h2 id="bridge"><span class="num">7</span>Bridge Refactor</h2>
+
+<p><code>tools/renode_heartbeat_bridge.py</code> (688 LOC) is one <code>RenodeHeartbeatBridge</code> node doing five jobs:
+time-sync master, heartbeat watchdog, latency telemetry, position telemetry, and a metrics publisher.
+The math is correct and is <strong>not</strong> rewritten — it is <strong>extracted</strong> into reusable, unit-testable modules:</p>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Extracted module</th><th>Moves out</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td><code>bridge/timesync.py</code></td><td><code>_recompute_clock_mapping</code>, <code>publish_time_sync_request</code>, <code>on_time_sync_echo</code>, RTT jitter</td><td>Pure clock-mapping math, testable with synthetic samples</td></tr>
+    <tr><td><code>bridge/telemetry.py</code></td><td><code>TopicTelemetryState</code> (latency / jitter / bandwidth / rate)</td><td>Already nearly standalone; promote to first-class</td></tr>
+    <tr><td><code>bridge/watchdog.py</code></td><td>Heartbeat timeout → offline/alert logic</td><td>Reusable policy; configurable thresholds</td></tr>
+    <tr><td><code>bridge/node.py</code></td><td>Thin <code>RenodeHeartbeatBridge</code> that wires the above into rclpy timers/subs</td><td>Only ROS glue remains</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout ok">
+  <div class="head">⓷ Generalize to an adapter interface</div>
+  <p>The bridge becomes the reference implementation of a <code>NodeAdapter</code> protocol. Adding a real-hardware STM32 adapter
+     (no Renode heartbeat) or a second simulated board later means implementing the same interface — no dashboard changes.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="realtime"><span class="num">8</span>Real-Time Transport</h2>
+
+<p>The single highest-impact UX change. Replace the three polling intervals with a push channel.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>Phase 1 — Server-Sent Events (recommended)</h4>
+    <ul>
+      <li>One-way, trivial over plain HTTP, auto-reconnect built into the browser <code>EventSource</code> API.</li>
+      <li><code>GET /events</code> streams a typed event stream: <code>node.changed</code>, <code>failure.logged</code>, <code>metrics.updated</code>, <code>topic.sample</code>, <code>graph.changed</code>.</li>
+      <li>Client keeps a tiny in-memory store; applies patches; re-renders only affected components.</li>
+      <li>No new dependency, no WebSocket proxy/ingress concerns.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Phase 2 — WebSocket (optional)</h4>
+    <ul>
+      <li>Only if we later need client→server commands over the same socket (e.g. ack failures, drag-to-reorder).</li>
+      <li>Would use <code>flask-sock</code> or a small ASGI sidecar.</li>
+      <li>REST <code>/api/ros/watch</code> etc. remain regardless.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="diagram">Browser                         Server
+  │  GET /events  (text/event-stream)
+  │ ───────────────────────────────────►
+  │                                    │  EventBus fan-out
+  │  event: metrics.updated            │
+  │  data: {aggregate:{…}}             │
+  │ ◄───────────────────────────────────
+  │  event: node.changed               │
+  │  data: {node:{id:755,status:…}}    │
+  │ ◄───────────────────────────────────
+  │  (no polling, no 3 concurrent loops)│</div>
+
+<!-- ============================================================ -->
+<h2 id="frontend"><span class="num">9</span>Frontend Strategy</h2>
+
+<p>Two viable directions — pick one per the team's appetite. Both start from the current server-rendered Bootstrap base.</p>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>Option A — Server-rendered + HTMX/SSE <span class="pill keep">low risk</span></h4>
+    <p>Keep Jinja templates; add HTMX for partial swaps and an <code>EventSource</code> listener that triggers HTMX
+       <code>hx-swap</code> on the SSE events. Charts stay Chart.js.</p>
+    <p><strong>Pros:</strong> minimal new tooling, reuses existing CSS/templates, fast to ship, great for ops dashboards.</p>
+    <p><strong>Cons:</strong> less interactivity headroom long-term.</p>
+  </div>
+  <div class="card">
+    <h4>Option B — Lightweight SPA <span class="pill new">more headroom</span></h4>
+    <p>Preact/Petite-Vue or vanilla Web-Components SPA against the OpenAPI REST + SSE stream. Flask becomes a pure API.</p>
+    <p><strong>Pros:</strong> decoupled UI, better state handling, easier to add control panels.</p>
+    <p><strong>Cons:</strong> build pipeline, more surface area, must re-implement the 7 current pages.</p>
+  </div>
+</div>
+
+<div class="callout info">
+  <div class="head">Recommendation</div>
+  <p>Start with <strong>Option A (HTMX + SSE)</strong> to deliver the real-time win quickly while preserving the existing look,
+     and treat the SSE event schema as the stable contract that makes a future SPA (Option B) a drop-in.</p>
+</div>
+
+<h3>9.1 Immediate UI cleanups (either path)</h3>
+<ul>
+  <li>Remove the dead <code>template/</code> directory (duplicate of <code>templates/</code>).</li>
+  <li>Move per-page JS out of inline <code>&lt;script&gt;</code> into <code>static/js/*</code> modules.</li>
+  <li>Stop rendering latency as a pre-formatted string on the model — render from numbers in the template.</li>
+  <li>Unify the 3 polling loops behind the SSE client.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="api"><span class="num">10</span>API &amp; Data Model</h2>
+
+<h3>10.1 REST surface (v2, OpenAPI-documented)</h3>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Method</th><th>Path</th><th>Auth</th><th>Change</th></tr></thead>
+  <tbody>
+    <tr><td>GET</td><td><code>/api/system</code></td><td>—</td><td><span class="pill new">renamed</span> from <code>/api/system_status</code> (old kept as alias)</td></tr>
+    <tr><td>GET</td><td><code>/api/nodes</code> · <code>/api/nodes/{id}</code></td><td>—</td><td><span class="pill keep">unchanged</span></td></tr>
+    <tr><td>PATCH</td><td><code>/api/nodes/{id}</code></td><td>yes</td><td><span class="pill new">RESTful</span> replaces POST <code>/api/update_node</code></td></tr>
+    <tr><td>GET</td><td><code>/api/failures</code></td><td>—</td><td><span class="pill keep">unchanged</span></td></tr>
+    <tr><td>POST</td><td><code>/api/failures</code></td><td>yes</td><td><span class="pill new">RESTful</span> replaces <code>/api/add_failure</code></td></tr>
+    <tr><td>GET</td><td><code>/api/metrics/{summary|topics|containers|nodes/{id}}</code></td><td>—</td><td><span class="pill keep">unchanged</span></td></tr>
+    <tr><td>GET</td><td><code>/api/ros/graph</code></td><td>—</td><td><span class="pill keep">unchanged</span></td></tr>
+    <tr><td>POST/DELETE</td><td><code>/api/ros/watch</code> · <code>/api/ros/watch/{topic}</code></td><td>—</td><td><span class="pill new">RESTful verbs</span></td></tr>
+    <tr><td>GET</td><td><code>/events</code></td><td>—</td><td><span class="pill new">SSE stream</span></td></tr>
+    <tr><td>GET</td><td><code>/api/logs/{node}</code></td><td>—</td><td><span class="pill refactor">structured log query</span></td></tr>
+    <tr><td>GET</td><td><code>/health</code> · <code>/ready</code></td><td>—</td><td><span class="pill new">split liveness/readiness</span></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h3>10.2 Domain models (typed)</h3>
+<pre><code><span class="kw">class</span> <span class="fn">Node</span>:          id, name, type, status, health, uptime, tasks[], first_seen, last_seen
+<span class="kw">class</span> <span class="fn">Failure</span>:       id, node_id, ts, level, description        <span class="com"># id is DB PK</span>
+<span class="kw">class</span> <span class="fn">MetricsSnapshot</span>: aggregate + per_node + per_topic + containers + history
+<span class="kw">class</span> <span class="fn">RosGraphSnapshot</span>: nodes[], topics[], watched_topics{}, last_refresh
+
+<span class="com"># Events crossing the ROS→Store boundary</span>
+NodeStatusEvent · FailureEvent · MetricsEvent · RawHeartbeatEvent
+GraphEvent · TopicSampleEvent · WatchEvent</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="observability"><span class="num">11</span>Observability</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>Structured logging</h4>
+    <ul>
+      <li>JSON logs with <code>node_id</code>, <code>event</code>, <code>trace_id</code> fields.</li>
+      <li><strong>Kills <code>get_node_log_lines</code></strong> regex: the <code>/api/logs/{node}</code> query filters structured records instead of grepping a flat file.</li>
+      <li>Rotation + size caps via stdlib <code>RotatingFileHandler</code>.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Health &amp; metrics</h4>
+    <ul>
+      <li><code>/health</code> = liveness (process alive); <code>/ready</code> = readiness (ROS connected / agent reachable).</li>
+      <li>Optional <code>/metrics</code> Prometheus endpoint (request rates, event lag, ROS spin errors).</li>
+      <li>Docker stats collector kept as a host adapter publishing <code>MetricsEvent</code>.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="security"><span class="num">12</span>Security</h2>
+<ul>
+  <li><strong>Session auth</strong> (Flask-Login) replacing single-user HTTPBasicAuth; hashed passwords in DB.</li>
+  <li><strong>Roles:</strong> <code>viewer</code> (read + SSE), <code>operator</code> (watch/unwatch, ack failures), <code>admin</code> (node status changes, config).</li>
+  <li><strong>CSRF</strong> protection on all state-changing forms/requests.</li>
+  <li><strong>Audit log:</strong> who changed which node / acked which failure (stored next to failures).</li>
+  <li>Keep existing rate limiting; route <code>/events</code> through a per-IP connection cap.</li>
+  <li>Secrets remain env-driven (<code>SECRET_KEY</code>, <code>ADMIN_PASSWORD</code>); never committed.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2 id="structure"><span class="num">13</span>Directory Structure</h2>
+<pre><code>microk3/
+├── <span class="fn">microk3/</span>                      <span class="com"># importable package</span>
+│   ├── app_factory.py          <span class="com"># create_app()</span>
+│   ├── config.py
+│   ├── extensions.py           <span class="com"># db, login, limiter</span>
+│   ├── store/
+│   │   ├── state.py            <span class="com"># StateStore + SystemSnapshot</span>
+│   │   ├── events.py           <span class="com"># typed event dataclasses</span>
+│   │   ├── bus.py              <span class="com"># EventBus (pub/sub for SSE)</span>
+│   │   └── persistence.py      <span class="com"># SQLite repository</span>
+│   ├── ros/
+│   │   ├── service.py          <span class="com"># RosService / NullRosService</span>
+│   │   └── interface.py        <span class="com"># ← former ros_interface.py</span>
+│   ├── adapters/
+│   │   ├── docker_stats.py     <span class="com"># ← from metrics.py</span>
+│   │   └── bridge/             <span class="com"># ← from tools/renode_heartbeat_bridge.py</span>
+│   │       ├── node.py · timesync.py · telemetry.py · watchdog.py
+│   ├── api/                    <span class="com"># api_bp + OpenAPI schema</span>
+│   ├── web/                    <span class="com"># web_bp (pages) · sse_bp · auth_bp</span>
+│   ├── models/                 <span class="com"># Node, Failure, Metrics (typed)</span>
+│   └── logging_setup.py
+├── templates/  static/         <span class="com"># UI (HTMX + EventSource)</span>
+├── tests/                      <span class="com"># unit + integration (no ROS needed)</span>
+├── Dockerfile · docker-compose.yml · requirements.txt
+└── README.md</code></pre>
+
+<!-- ============================================================ -->
+<h2 id="migration"><span class="num">14</span>Migration Plan (incremental, always-green)</h2>
+
+<div class="phase">
+  <div class="phase-num">1</div>
+  <div class="phase-body">
+    <h4>Stabilize &amp; clean</h4>
+    <span class="dur">~2 days · risk: low</span>
+    <p>Delete dead <code>template/</code> dir. Move inline JS to <code>static/js</code>. Hoist magic constants (<code>ROS_WATCH_LIMIT</code>,
+       <code>ROS_SAMPLE_HISTORY_LIMIT</code>, history depth) into config. Extract <code>TopicTelemetryState</code> + clock-mapping into
+       testable modules. <strong>No behavior change.</strong></p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">2</div>
+  <div class="phase-body">
+    <h4>StateStore + app factory</h4>
+    <span class="dur">~3 days · risk: medium</span>
+    <p>Introduce <code>create_app()</code>, move globals behind <code>StateStore</code>, convert the <code>ros_update_callback</code> switch into
+       typed events. Route handlers delegate to the store. Existing templates keep working against snapshots. Fix the
+       gunicorn-starts-ROS bug via lifecycle hooks.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">3</div>
+  <div class="phase-body">
+    <h4>Persistence + health</h4>
+    <span class="dur">~2 days · risk: low</span>
+    <p>SQLite repository for nodes/failures/metrics-snapshot. State survives restart. Split <code>/health</code> vs <code>/ready</code>.
+       Structured JSON logging; replace log-grep with structured query.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">4</div>
+  <div class="phase-body">
+    <h4>Real-time (SSE) + UI</h4>
+    <span class="dur">~3 days · risk: medium</span>
+    <p><code>EventBus</code> + <code>/events</code> SSE. HTMX partial swaps driven by <code>EventSource</code>. Retire the polling loops.
+       Surgical DOM updates for watched topics. The big visible win.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">5</div>
+  <div class="phase-body">
+    <h4>API + auth polish</h4>
+    <span class="dur">~2 days · risk: low</span>
+    <p>RESTful verbs + OpenAPI/Swagger UI. Session auth + roles + CSRF + audit log. Backwards-compatible aliases for
+       the old endpoints during transition.</p>
+  </div>
+</div>
+<div class="phase">
+  <div class="phase-num">6</div>
+  <div class="phase-body">
+    <h4>Adapter generalization</h4>
+    <span class="dur">~2 days · risk: low</span>
+    <p>Formalize <code>NodeAdapter</code> protocol; the Renode bridge becomes one impl. Prepares for additional boards /
+       a real-hardware adapter without touching the dashboard.</p>
+  </div>
+</div>
+
+<div class="callout ok">
+  <div class="head">Always-green guarantee</div>
+  <p>Each phase ends with a deployable dashboard. Phase 1 is pure cleanup; phase 2 keeps templates working; the real-time
+     layer (phase 4) is additive until the polling loops are removed. Rollback at any phase = revert one PR.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="stack"><span class="num">15</span>Tech Stack Decisions</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Concern</th><th>Choice</th><th>Rationale</th></tr></thead>
+  <tbody>
+    <tr><td>Web framework</td><td><strong>Flask 3</strong> (keep)</td><td>Existing investment; rclpy is sync/threaded anyway. Avoids forcing ASGI.</td></tr>
+    <tr><td>Real-time</td><td><strong>SSE</strong> (stdlib <code>Response</code> stream)</td><td>One-way push, no deps, trivial ingress. WS deferred to a real need.</td></tr>
+    <tr><td>Validation/models</td><td><strong>dataclasses</strong> (+ Pydantic v2 optional for API I/O)</td><td>dataclasses already in use; Pydantic only where OpenAPI is generated.</td></tr>
+    <tr><td>Persistence</td><td><strong>SQLite</strong> via <code>sqlite3</code> / <code>SQLAlchemy</code> core</td><td>Zero-ops, in-volume, survives restart. No external DB to run.</td></tr>
+    <tr><td>Frontend</td><td><strong>Jinja + HTMX + EventSource</strong> (Phase A)</td><td>Reuses templates; minimal build tooling; SSE-native.</td></tr>
+    <tr><td>API docs</td><td><strong>OpenAPI</strong> (flask-smorest / apispec)</td><td>Auto Swagger UI; stable contract for a future SPA.</td></tr>
+    <tr><td>Server</td><td><strong>gunicorn</strong> (1–2 sync workers; threaded)</td><td>SSE under gunicorn needs threaded/async workers — documented in deployment.</td></tr>
+    <tr><td>ROS</td><td><strong>rclpy</strong> on <code>ros:humble</code> base (keep)</td><td>Unchanged; agent + CycloneDDS already in place.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <div class="head">⚠ SSE + gunicorn note</div>
+  <p>SSE holds a connection open per tab, which doesn't play with the default prefork sync model. Use
+     <strong>gthread</strong> workers (or a small <code>gevent</code> pool) for the <code>/events</code> route, and document the worker count in
+     <code>docker-compose</code>. This is a deployment note, not an architecture risk.</p>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="testing"><span class="num">16</span>Testing Strategy</h2>
+
+<div class="grid-2">
+  <div class="card">
+    <h4>Unit (no ROS, no Docker)</h4>
+    <ul>
+      <li><code>StateStore.apply</code> for every event type → correct snapshot + derived events.</li>
+      <li>Clock-mapping &amp; latency math (extracted from bridge) with synthetic time-sync samples — currently untested.</li>
+      <li>Failure ID stability, status transitions, watch-limit enforcement.</li>
+      <li>SQLite repository round-trips.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h4>Integration &amp; contract</h4>
+    <ul>
+      <li><code>NullRosService</code> + fake event feed drives the full app; assert REST + SSE output.</li>
+      <li>OpenAPI schema tests (every route documented; response models match).</li>
+      <li>Backwards-compat aliases for renamed endpoints.</li>
+      <li>Docker-compose smoke test: agent + bridge + dashboard boot, a simulated heartbeat appears via SSE.</li>
+    </ul>
+  </div>
+</div>
+<p>Target: <strong>≥80% coverage</strong> on non-rclpy code (rclpy paths covered by the <code>NullRosService</code> integration tests).</p>
+
+<!-- ============================================================ -->
+<h2 id="risks"><span class="num">17</span>Risks &amp; Mitigations</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Risk</th><th>Likelihood</th><th>Mitigation</th></tr></thead>
+  <tbody>
+    <tr><td>SSE under gunicorn workers stalls/drops</td><td>Medium</td><td>Use <code>gthread</code>/<code>gevent</code> workers; cap per-IP SSE connections; add client auto-reconnect (built into <code>EventSource</code>); keep polling endpoints as fallback.</td></tr>
+    <tr><td>rclpy threading vs. Flask GIL contention</td><td>Medium</td><td>Keep ROS in its own executor thread (current design); StateStore is the only shared touchpoint, behind one lock; snapshots are immutable.</td></tr>
+    <tr><td>Behavior regressions during refactor</td><td>Medium</td><td>Phase-by-phase with always-green deploys; existing pytest suite extended before each extraction; backwards-compat aliases.</td></tr>
+    <tr><td>SQLite write contention from ROS + HTTP threads</td><td>Low</td><td>Single writer via the StateStore; WAL mode; debounced metric persistence (not every heartbeat).</td></tr>
+    <tr><td>Scope creep toward full SPA</td><td>Medium</td><td>Defer SPA (Option B) explicitly; HTMX+SSE delivers the real-time goal first against a stable event schema.</td></tr>
+    <tr><td>Breaking the firmware/agent wire contract</td><td>Low</td><td><code>microk3/*</code> topics are explicitly out of scope; documented as frozen in this RFC.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2 id="timeline"><span class="num">18</span>Timeline &amp; Milestones</h2>
+
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Phase</th><th>Duration</th><th>Deliverable</th><th>Definition of done</th></tr></thead>
+  <tbody>
+    <tr><td>1 · Stabilize &amp; clean</td><td>2 days</td><td>Dead code gone, constants in config, bridge modules extracted</td><td>Tests green; no behavior change</td></tr>
+    <tr><td>2 · StateStore + factory</td><td>3 days</td><td><code>create_app</code>, typed events, store owns state</td><td>ROS under gunicorn works; all pages render</td></tr>
+    <tr><td>3 · Persistence + health</td><td>2 days</td><td>SQLite, restart-safe, <code>/ready</code></td><td>State survives <code>compose restart</code></td></tr>
+    <tr><td>4 · Real-time SSE + UI</td><td>3 days</td><td><code>/events</code>, HTMX swaps, no polling</td><td>Sub-second heartbeat→UI propagation</td></tr>
+    <tr><td>5 · API + auth</td><td>2 days</td><td>OpenAPI, sessions, roles, audit</td><td>Swagger UI live; role-gated mutations</td></tr>
+    <tr><td>6 · Adapters</td><td>2 days</td><td><code>NodeAdapter</code> protocol; Renode as impl</td><td>2nd adapter feasible without core changes</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Total: ~2 weeks</strong> of focused work for a single engineer, sequenced so the dashboard stays shippable at every
+phase. The highest user-visible value (real-time push, restart-safe state) lands by the end of phase 4 (~day 10).</p>
+
+<hr>
+
+<h2 id="open-questions">Open questions for review</h2>
+<ol>
+  <li><strong>Frontend path</strong> — confirm HTMX+SSE (Option A) vs committing now to an SPA (Option B)?</li>
+  <li><strong>Persistence</strong> — SQLite acceptable, or is Postgres preferred on the Jetson deployment for shared state across services?</li>
+  <li><strong>Auth scope</strong> — is multi-user/roles in scope for v2.0, or defer to v2.1 and keep single-admin with stronger hashing/session for now?</li>
+  <li><strong>Adapter scope</strong> — is a second (non-Renode) node adapter imminent, justifying phase 6 now?</li>
+  <li><strong>OpenAPI tooling</strong> — preference between <code>flask-smorest</code> (decorators, full) vs <code>apispec</code> (lighter, manual)?</li>
+</ol>
+
+<div class="footer">
+  <p><strong>MicroK3 v2.0 Redesign RFC</strong> · prepared for review · 2026-06-25<br>
+  Scope: <code>microrosWs/microk3</code> · Out of scope: firmware, <code>microk3/*</code> ROS topic contract, micro-ROS agent image.<br>
+  Every phase is independently deployable; rollback = revert one PR.</p>
+</div>
+
+</main>
+</div>
+</body>
+</html>

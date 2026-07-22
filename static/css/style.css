@@ -136,3 +136,61 @@ body {
 .navbar-brand {
     font-weight: bold;
 }
+
+.ros-toolbar {
+    gap: 12px;
+}
+
+.ros-status-pill {
+    border-radius: 999px;
+    padding: 0.4rem 0.85rem;
+    font-size: 0.9rem;
+}
+
+.ros-topic-table td,
+.ros-topic-table th {
+    vertical-align: middle;
+}
+
+.ros-topic-name {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.9rem;
+}
+
+.ros-sample-box {
+    background: #0f172a;
+    color: #dbeafe;
+    border-radius: 10px;
+    padding: 12px;
+    max-height: 260px;
+    overflow: auto;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+}
+
+.ros-history-list {
+    display: grid;
+    gap: 10px;
+}
+
+.ros-history-item {
+    border: 1px solid rgba(44, 62, 80, 0.12);
+    border-radius: 10px;
+    padding: 10px 12px;
+    background: #f8fbff;
+}
+
+.ros-node-list {
+    max-height: 520px;
+    overflow: auto;
+}
+
+.ros-node-entry {
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+    padding: 10px 0;
+}
+
+.ros-node-entry:last-child {
+    border-bottom: none;
+}

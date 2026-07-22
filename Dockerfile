@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
     gcc \
+    ros-humble-rmw-cyclonedds-cpp \
     ros-humble-std-msgs \
     ros-humble-sensor-msgs \
     && rm -rf /var/lib/apt/lists/*
