@@ -1,5 +1,6 @@
 import json
 import pytest
+import numpy as np
 from app import app, get_default_data
 from base64 import b64encode
 
@@ -49,6 +50,13 @@ def test_ros_page(client):
     """Test ROS page loads"""
     response = client.get('/ros')
     assert response.status_code == 200
+
+
+def test_rover_map_page(client):
+    """Test the interactive rover-map page loads."""
+    response = client.get('/rover-map')
+    assert response.status_code == 200
+    assert b'rover-map-canvas' in response.data
 
 
 def test_health_check(client):
@@ -310,6 +318,111 @@ def test_api_ros_watch_and_unwatch_with_fake_manager(client):
         content_type='application/json'
     )
     assert unwatch_response.status_code == 200
+
+
+def test_pointcloud_api_with_fake_manager(client):
+    import app as microk3_app
+
+    class FakeRosManager:
+        running = True
+
+        def __init__(self):
+            self.live_started = []
+            self.accumulation_started = []
+
+        def start_pointcloud_live(self, topic_name):
+            self.live_started.append(topic_name)
+            return {'success': True, 'topic_name': topic_name}
+
+        def stop_pointcloud_live(self, topic_name):
+            return {'success': True, 'topic_name': topic_name}
+
+        def get_pointcloud_live_snapshot(self, topic_name, max_points):
+            assert max_points == 20000
+            return {
+                'xyz': np.array([[1.0, 2.0, 3.0]], dtype=np.float32),
+                'colors': np.array([[10, 20, 30]], dtype=np.uint8),
+                'has_color': True,
+                'frame_id': 'zed_camera_frame',
+                'point_count': 1,
+                'point_count_after_downsample': 1,
+                'frames_received': 7,
+                'last_error': None,
+            }
+
+        def start_pointcloud_accumulation(self, topic_name, pose_topic, voxel_size, max_map_points):
+            self.accumulation_started.append((topic_name, pose_topic, voxel_size, max_map_points))
+            return {'success': True, 'topic_name': topic_name, 'pose_topic': pose_topic}
+
+        def stop_pointcloud_accumulation(self, topic_name):
+            return {'success': True, 'topic_name': topic_name}
+
+        def reset_pointcloud_accumulation(self, topic_name):
+            return {'success': True, 'topic_name': topic_name}
+
+        def get_pointcloud_accumulation_snapshot(self, topic_name):
+            return {
+                'points': np.array([[4.0, 5.0, 6.0]], dtype=np.float32),
+                'colors': None,
+                'has_color': False,
+                'point_count': 1,
+                'frames_received': 3,
+                'frames_dropped_no_pose': 2,
+                'last_error': 'No nearby pose',
+            }
+
+    manager = FakeRosManager()
+    microk3_app.ROS_AVAILABLE = True
+    microk3_app.ros_manager = manager
+
+    start_live = client.post('/api/ros/pointcloud/live/start', json={'topic_name': 'cloud'})
+    assert start_live.status_code == 200
+    assert manager.live_started == ['/cloud']
+
+    latest = client.get('/api/ros/pointcloud/live/zed/points/latest')
+    assert latest.status_code == 200
+    latest_payload = latest.get_json()
+    assert latest_payload['topic_name'] == '/zed/points'
+    assert latest_payload['point_count'] == 1
+    assert latest_payload['has_color'] is True
+    assert latest_payload['positions_base64']
+    assert latest_payload['colors_base64']
+
+    start_accumulation = client.post(
+        '/api/ros/pointcloud/accumulate/start',
+        json={
+            'topic_name': '/cloud',
+            'pose_topic': 'zed/pose',
+            'voxel_size': 0.1,
+            'max_map_points': 1000,
+        },
+    )
+    assert start_accumulation.status_code == 200
+    assert manager.accumulation_started == [('/cloud', '/zed/pose', 0.1, 1000)]
+
+    map_snapshot = client.get('/api/ros/pointcloud/accumulate/zed/points/snapshot')
+    assert map_snapshot.status_code == 200
+    map_payload = map_snapshot.get_json()
+    assert map_payload['frames_dropped_no_pose'] == 2
+    assert map_payload['has_color'] is False
+    assert map_payload['last_error'] == 'No nearby pose'
+
+
+def test_pointcloud_api_validates_parameters(client):
+    import app as microk3_app
+
+    class FakeRosManager:
+        running = True
+
+    microk3_app.ROS_AVAILABLE = True
+    microk3_app.ros_manager = FakeRosManager()
+
+    response = client.post(
+        '/api/ros/pointcloud/accumulate/start',
+        json={'topic_name': '/cloud', 'voxel_size': 0},
+    )
+    assert response.status_code == 400
+    assert 'voxel_size' in response.get_json()['error']
 
 
 def test_performance_metrics_update_exposed_by_api(client):

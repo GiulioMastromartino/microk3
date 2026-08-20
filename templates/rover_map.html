@@ -1,0 +1,343 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .rover-map-layout { min-height: calc(100vh - 3rem); }
+    .rover-map-sidebar { border-right: 1px solid #d9e0e6; background: #f7f9fb; }
+    .rover-map-canvas { min-height: 580px; height: calc(100vh - 3rem); background: #101820; }
+    .rover-map-canvas canvas { display: block; width: 100%; height: 100%; }
+    .rover-map-stat { font-variant-numeric: tabular-nums; }
+    @media (max-width: 991px) {
+        .rover-map-sidebar { border-right: 0; border-bottom: 1px solid #d9e0e6; }
+        .rover-map-canvas { min-height: 500px; height: 65vh; }
+    }
+</style>
+
+<div class="row g-0 rover-map-layout">
+    <aside class="col-lg-3 rover-map-sidebar p-3">
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <h2 class="h5 mb-0"><i class="fas fa-map-location-dot me-2"></i>Rover Map</h2>
+            <span id="pose-badge" class="badge text-bg-secondary">Disconnected</span>
+        </div>
+
+        <label for="pose-topic" class="form-label small fw-semibold">Pose topic</label>
+        <input id="pose-topic" class="form-control mb-3" value="/zed/zed_node/pose">
+        <div class="d-grid gap-2 mb-4">
+            <button id="connect-pose-button" class="btn btn-primary" type="button"><i class="fas fa-plug me-1"></i>Connect pose</button>
+            <button id="disconnect-pose-button" class="btn btn-outline-secondary" type="button" disabled><i class="fas fa-link-slash me-1"></i>Disconnect</button>
+        </div>
+
+        <div class="d-grid gap-2 mb-4">
+            <button id="top-view-button" class="btn btn-outline-secondary" type="button"><i class="fas fa-arrow-down me-1"></i>Top view</button>
+            <button id="reset-origin-button" class="btn btn-outline-warning" type="button" disabled><i class="fas fa-rotate-left me-1"></i>Reset origin</button>
+        </div>
+
+        <div class="border-top pt-3 small">
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Mesh</span><strong id="mesh-status">Loading</strong></div>
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Pose samples</span><strong id="pose-count" class="rover-map-stat">0</strong></div>
+            <div class="mb-2"><span class="text-muted">Pose frame</span><div id="pose-frame-id" class="text-break">Waiting</div></div>
+            <div class="mb-2"><span class="text-muted">Axes</span><div id="pose-convention">Waiting</div></div>
+            <div class="alert alert-info small py-2 mt-3 mb-0">
+                Click the mesh to set the rover tracking origin. This aligns position only; if movement is rotated relative to the mesh, a two-point calibration is required.
+            </div>
+            <div id="rover-map-error" class="alert alert-warning small py-2 mt-3 d-none mb-0" role="alert"></div>
+        </div>
+    </aside>
+    <section class="col-lg-9 rover-map-canvas position-relative">
+        <div id="rover-map-canvas" class="w-100 h-100"></div>
+    </section>
+</div>
+
+<script src="{{ url_for('static', filename='js/ros-three-coordinates.js') }}"></script>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+
+const roverMapStorageKey = 'microk3.rover-map.calibration.v2';
+const savedCalibration = JSON.parse(localStorage.getItem(roverMapStorageKey) || 'null');
+const state = {
+    connected: false,
+    ownsPoseWatch: false,
+    poseTopic: '',
+    pollId: null,
+    poseCount: 0,
+    mapOriginPoint: savedCalibration
+        ? new THREE.Vector3(savedCalibration.x, savedCalibration.y, savedCalibration.z)
+        : null,
+    latestPose: null,
+};
+const container = document.getElementById('rover-map-canvas');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101820);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x314048, 2.5));
+const camera = new THREE.PerspectiveCamera(55, 1, 0.01, 10000);
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let renderer = null;
+let controls = null;
+let loadedMesh = null;
+let mapRadius = 10;
+let rendererError = null;
+let clickStart = null;
+const originMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.12, 20, 14),
+    new THREE.MeshBasicMaterial({ color: 0xffd166 })
+);
+originMarker.visible = false;
+scene.add(originMarker);
+const roverMarker = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 24, 16),
+    new THREE.MeshBasicMaterial({ color: 0xff3b30 })
+);
+roverMarker.visible = false;
+scene.add(roverMarker);
+
+try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+} catch (error) {
+    rendererError = `WebGL rendering is unavailable: ${error.message}`;
+    container.innerHTML = '<div class="text-light p-4 small">WebGL rendering is unavailable in this browser.</div>';
+    setError(rendererError);
+}
+
+function setError(message) {
+    const error = document.getElementById('rover-map-error');
+    error.textContent = message || '';
+    error.classList.toggle('d-none', !message);
+}
+
+function resizeRenderer() {
+    if (!renderer) return;
+    const { clientWidth: width, clientHeight: height } = container;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+}
+
+function animate() {
+    if (renderer && controls) {
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+}
+
+function frameMesh(object) {
+    // OBJ is Z-up; rotate it into Three.js's Y-up scene before calibration.
+    object.rotation.x = -Math.PI / 2;
+    const box = new THREE.Box3().setFromObject(object);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    mapRadius = Math.max(size.length() / 2, 1);
+    object.position.sub(center);
+    camera.position.set(mapRadius * 1.2, mapRadius * 0.9, mapRadius * 1.2);
+    controls.target.set(0, 0, 0);
+    camera.lookAt(controls.target);
+    controls.update();
+}
+
+function loadMesh() {
+    if (!renderer) return;
+    const loader = new OBJLoader();
+    loader.load(
+        '/assets/models/Model3D_mesh2.obj',
+        (object) => {
+            loadedMesh = object;
+            object.traverse((child) => {
+                if (!child.isMesh) return;
+                child.material = new THREE.MeshStandardMaterial({
+                    vertexColors: child.geometry.hasAttribute('color'),
+                    color: 0xb8c6cc,
+                    roughness: 0.8,
+                    metalness: 0.0,
+                });
+            });
+            scene.add(object);
+            frameMesh(object);
+            if (state.mapOriginPoint) {
+                originMarker.position.copy(state.mapOriginPoint);
+                originMarker.visible = true;
+            }
+            updateRoverMarker();
+            setPoseUi();
+            document.getElementById('mesh-status').textContent = 'Loaded';
+        },
+        (progress) => {
+            if (progress.total > 0) {
+                document.getElementById('mesh-status').textContent = `${Math.round((progress.loaded / progress.total) * 100)}%`;
+            }
+        },
+        (error) => {
+            document.getElementById('mesh-status').textContent = 'Failed';
+            setError(`Failed to load mesh: ${error.message || error}`);
+        }
+    );
+}
+
+function showTopView() {
+    if (!controls) return;
+    camera.position.set(0, mapRadius * 2.2, 0.01);
+    controls.target.set(0, 0, 0);
+    camera.lookAt(controls.target);
+    controls.update();
+}
+
+function setPoseUi() {
+    document.getElementById('pose-badge').textContent = state.connected ? 'Connected' : 'Disconnected';
+    document.getElementById('pose-badge').className = `badge ${state.connected ? 'text-bg-success' : 'text-bg-secondary'}`;
+    document.getElementById('connect-pose-button').disabled = state.connected;
+    document.getElementById('disconnect-pose-button').disabled = !state.connected;
+    document.getElementById('reset-origin-button').disabled = !state.mapOriginPoint;
+}
+
+function samplePath(topicName) {
+    return `/api/ros/topics/${encodeURIComponent(topicName).replaceAll('%2F', '/')}/samples`;
+}
+
+async function fetchJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || 'Request failed');
+    return payload;
+}
+
+function readPose(payload) {
+    const structured = payload?.latest?.value?.structured;
+    const position = structured?.pose?.position;
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+        return null;
+    }
+    return {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        frameId: structured?.header?.frame_id || '',
+        timestamp: payload?.latest?.timestamp || null,
+    };
+}
+
+function updateRoverMarker() {
+    if (!loadedMesh || !state.mapOriginPoint || !state.latestPose) return;
+    const pose = state.latestPose;
+    const [x, y, z] = MicroK3RosThree.remapRosToThree(pose.x, pose.y, pose.z, pose.frameId);
+    roverMarker.position.copy(state.mapOriginPoint).add(new THREE.Vector3(x, y, z));
+    roverMarker.visible = true;
+}
+
+function persistCalibration() {
+    if (!state.mapOriginPoint) {
+        localStorage.removeItem(roverMapStorageKey);
+        return;
+    }
+    localStorage.setItem(roverMapStorageKey, JSON.stringify(state.mapOriginPoint));
+}
+
+async function pollPose() {
+    if (!state.connected) return;
+    try {
+        const payload = await fetchJson(samplePath(state.poseTopic));
+        const pose = readPose(payload);
+        if (!pose) return;
+        if (pose.timestamp !== state.latestPose?.timestamp) state.poseCount += 1;
+        state.latestPose = pose;
+        document.getElementById('pose-count').textContent = state.poseCount.toLocaleString();
+        document.getElementById('pose-frame-id').textContent = pose.frameId || 'Unspecified';
+        document.getElementById('pose-convention').textContent = MicroK3RosThree.coordinateConvention(pose.frameId);
+        updateRoverMarker();
+        setError(rendererError);
+    } catch (error) {
+        setError(error.message);
+    }
+}
+
+async function connectPose() {
+    state.poseTopic = document.getElementById('pose-topic').value.trim();
+    if (!state.poseTopic) return setError('A pose topic is required.');
+    try {
+        const result = await fetchJson('/api/ros/watch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ topic_name: state.poseTopic }),
+        });
+        state.ownsPoseWatch = !result.already_watched;
+        state.connected = true;
+        setPoseUi();
+        await pollPose();
+        window.clearInterval(state.pollId);
+        state.pollId = window.setInterval(pollPose, 250);
+    } catch (error) {
+        setError(error.message);
+    }
+}
+
+async function disconnectPose() {
+    window.clearInterval(state.pollId);
+    try {
+        if (state.ownsPoseWatch) {
+            await fetchJson('/api/ros/unwatch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ topic_name: state.poseTopic }),
+            });
+        }
+    } catch (error) {
+        setError(error.message);
+    } finally {
+        state.connected = false;
+        state.ownsPoseWatch = false;
+        setPoseUi();
+    }
+}
+
+function calibrateFromPointer(event) {
+    if (!renderer || !loadedMesh || !clickStart) return;
+    if (Math.hypot(event.clientX - clickStart.x, event.clientY - clickStart.y) > 5) return;
+    const bounds = renderer.domElement.getBoundingClientRect();
+    pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+    pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+    raycaster.setFromCamera(pointer, camera);
+    const hit = raycaster.intersectObject(loadedMesh, true)[0];
+    if (!hit) return;
+    state.mapOriginPoint = hit.point.clone();
+    persistCalibration();
+    originMarker.position.copy(state.mapOriginPoint);
+    originMarker.visible = true;
+    updateRoverMarker();
+    setPoseUi();
+}
+
+document.getElementById('connect-pose-button').addEventListener('click', connectPose);
+document.getElementById('disconnect-pose-button').addEventListener('click', disconnectPose);
+document.getElementById('top-view-button').addEventListener('click', showTopView);
+document.getElementById('reset-origin-button').addEventListener('click', () => {
+    state.mapOriginPoint = null;
+    persistCalibration();
+    originMarker.visible = false;
+    roverMarker.visible = false;
+    setPoseUi();
+});
+if (renderer) {
+    renderer.domElement.addEventListener('pointerdown', (event) => { clickStart = { x: event.clientX, y: event.clientY }; });
+    renderer.domElement.addEventListener('pointerup', calibrateFromPointer);
+}
+window.addEventListener('resize', resizeRenderer);
+resizeRenderer();
+animate();
+setPoseUi();
+loadMesh();
+connectPose();
+</script>
+{% endblock %}

@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .pointcloud-layout { min-height: calc(100vh - 3rem); }
+    .pointcloud-sidebar { border-right: 1px solid #d9e0e6; background: #f7f9fb; }
+    .pointcloud-canvas { min-height: 580px; height: calc(100vh - 3rem); background: #101820; }
+    .pointcloud-canvas canvas { display: block; width: 100%; height: 100%; }
+    .pointcloud-stat { font-variant-numeric: tabular-nums; }
+    @media (max-width: 991px) {
+        .pointcloud-sidebar { border-right: 0; border-bottom: 1px solid #d9e0e6; }
+        .pointcloud-canvas { min-height: 500px; height: 65vh; }
+    }
+</style>
+
+<div class="row g-0 pointcloud-layout">
+    <aside class="col-lg-3 pointcloud-sidebar p-3">
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <h2 class="h5 mb-0"><i class="fas fa-cube me-2"></i>Point Cloud</h2>
+            <span id="connection-badge" class="badge text-bg-secondary">Disconnected</span>
+        </div>
+
+        <label for="cloud-topic" class="form-label small fw-semibold">Cloud topic</label>
+        <input id="cloud-topic" class="form-control mb-3" value="/zed/zed_node/point_cloud/cloud_registered">
+
+        <label class="form-label small fw-semibold">View mode</label>
+        <div class="btn-group w-100 mb-3" role="group" aria-label="Point cloud view mode">
+            <input type="radio" class="btn-check" name="view-mode" id="live-mode" value="live" checked>
+            <label class="btn btn-outline-primary" for="live-mode">Live</label>
+            <input type="radio" class="btn-check" name="view-mode" id="accumulate-mode" value="accumulate">
+            <label class="btn btn-outline-primary" for="accumulate-mode">Accumulated</label>
+        </div>
+
+        <div id="accumulation-options" class="d-none">
+            <label for="pose-topic" class="form-label small fw-semibold">Pose topic</label>
+            <input id="pose-topic" class="form-control mb-3" value="/zed/zed_node/pose">
+            <div class="row g-2 mb-3">
+                <div class="col-6">
+                    <label for="voxel-size" class="form-label small fw-semibold">Voxel (m)</label>
+                    <input id="voxel-size" class="form-control" type="number" min="0.001" step="0.01" value="0.05">
+                </div>
+                <div class="col-6">
+                    <label for="max-map-points" class="form-label small fw-semibold">Max points</label>
+                    <input id="max-map-points" class="form-control" type="number" min="1" step="10000" value="500000">
+                </div>
+            </div>
+            <button id="reset-button" class="btn btn-outline-warning w-100 mb-3" type="button" disabled>
+                <i class="fas fa-rotate-left me-1"></i>Reset map
+            </button>
+        </div>
+
+        <div class="d-grid gap-2 mb-4">
+            <button id="connect-button" class="btn btn-primary" type="button"><i class="fas fa-plug me-1"></i>Connect</button>
+            <button id="disconnect-button" class="btn btn-outline-secondary" type="button" disabled><i class="fas fa-link-slash me-1"></i>Disconnect</button>
+        </div>
+
+        <div class="mb-4">
+            <div class="small fw-semibold mb-2">Camera view</div>
+            <div class="btn-group w-100" role="group" aria-label="Camera view controls">
+                <button id="rotate-left-button" class="btn btn-outline-secondary" type="button" title="Rotate view left 90 degrees">
+                    <i class="fas fa-rotate-left"></i>
+                </button>
+                <button id="reset-view-button" class="btn btn-outline-secondary" type="button" title="Reset camera view">
+                    <i class="fas fa-crosshairs"></i>
+                </button>
+                <button id="rotate-right-button" class="btn btn-outline-secondary" type="button" title="Rotate view right 90 degrees">
+                    <i class="fas fa-rotate-right"></i>
+                </button>
+            </div>
+        </div>
+
+        <div class="border-top pt-3 small">
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Points</span><strong id="point-count" class="pointcloud-stat">0</strong></div>
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Frames</span><strong id="frames-received" class="pointcloud-stat">0</strong></div>
+            <div class="mb-2"><span class="text-muted">Frame</span><div id="cloud-frame-id" class="text-break">Waiting</div></div>
+            <div class="mb-2"><span class="text-muted">Axes</span><div id="coordinate-convention">Waiting</div></div>
+            <div id="dropped-row" class="d-none d-flex justify-content-between mb-2"><span class="text-muted">No pose</span><strong id="frames-dropped" class="pointcloud-stat">0</strong></div>
+            <div id="pointcloud-error" class="alert alert-warning small py-2 mt-3 d-none mb-0" role="alert"></div>
+        </div>
+    </aside>
+    <section class="col-lg-9 pointcloud-canvas position-relative">
+        <div id="pointcloud-canvas" class="w-100 h-100"></div>
+    </section>
+</div>
+
+<script src="{{ url_for('static', filename='js/ros-three-coordinates.js') }}"></script>
+<script type="importmap">
+{
+    "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.164.1/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.1/examples/jsm/"
+    }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const pointcloudStorageKey = 'microk3.pointcloud.settings';
+const savedPointcloudSettings = JSON.parse(localStorage.getItem(pointcloudStorageKey) || '{}');
+const state = {
+    connected: false,
+    mode: savedPointcloudSettings.mode || 'live',
+    topic: savedPointcloudSettings.topic || '',
+    pollId: null,
+};
+const container = document.getElementById('pointcloud-canvas');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101820);
+const camera = new THREE.PerspectiveCamera(60, 1, 0.01, 1000);
+camera.position.set(2.5, 2.5, 2.5);
+scene.add(new THREE.AxesHelper(0.5));
+scene.add(new THREE.GridHelper(8, 16, 0x36505c, 0x24343b));
+let renderer = null;
+let controls = null;
+let pointsObject = null;
+let rendererError = null;
+const defaultCameraPosition = new THREE.Vector3(2.5, 2.5, 2.5);
+const defaultCameraTarget = new THREE.Vector3(0, 0, 0);
+
+try {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    container.appendChild(renderer.domElement);
+    controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.target.set(0, 0, 0);
+} catch (error) {
+    rendererError = `WebGL rendering is unavailable: ${error.message}`;
+    container.innerHTML = '<div class="text-light p-4 small">WebGL rendering is unavailable in this browser. The point-cloud connection status remains available.</div>';
+}
+
+function resizeRenderer() {
+    if (!renderer) return;
+    const { clientWidth: width, clientHeight: height } = container;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height, false);
+}
+
+function animate() {
+    if (renderer && controls) {
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    requestAnimationFrame(animate);
+}
+window.addEventListener('resize', resizeRenderer);
+resizeRenderer();
+animate();
+
+function decodeBase64ToFloat32(value) {
+    const bytes = Uint8Array.from(atob(value), char => char.charCodeAt(0));
+    return new Float32Array(bytes.buffer);
+}
+
+function decodeBase64ToUint8(value) {
+    return Uint8Array.from(atob(value), char => char.charCodeAt(0));
+}
+
+function computeHeightColors(positions) {
+    const colors = new Float32Array(positions.length);
+    let minHeight = Infinity;
+    let maxHeight = -Infinity;
+    for (let index = 2; index < positions.length; index += 3) {
+        minHeight = Math.min(minHeight, positions[index]);
+        maxHeight = Math.max(maxHeight, positions[index]);
+    }
+    const range = Math.max(maxHeight - minHeight, 0.001);
+    for (let index = 0; index < positions.length; index += 3) {
+        const ratio = (positions[index + 2] - minHeight) / range;
+        colors[index] = ratio * 0.95 + 0.05;
+        colors[index + 1] = 0.25 + ratio * 0.25;
+        colors[index + 2] = 0.95 - ratio * 0.55;
+    }
+    return colors;
+}
+
+function clearPoints() {
+    if (!pointsObject) return;
+    scene.remove(pointsObject);
+    pointsObject.geometry.dispose();
+    pointsObject.material.dispose();
+    pointsObject = null;
+}
+
+function rotateView(angle) {
+    if (!controls) return;
+    const offset = camera.position.clone().sub(controls.target);
+    offset.applyAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+    camera.position.copy(controls.target).add(offset);
+    camera.lookAt(controls.target);
+    controls.update();
+}
+
+function resetView() {
+    if (!controls) return;
+    camera.position.copy(defaultCameraPosition);
+    controls.target.copy(defaultCameraTarget);
+    controls.update();
+}
+
+function updatePoints(payload) {
+    clearPoints();
+    if (!renderer) return;
+    if (!payload.positions_base64) return;
+    const positions = decodeBase64ToFloat32(payload.positions_base64);
+    if (!positions.length) return;
+    MicroK3RosThree.remapPositionsRosToThree(positions, payload.frame_id);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    if (payload.has_color && payload.colors_base64) {
+        const rgb = decodeBase64ToUint8(payload.colors_base64);
+        geometry.setAttribute('color', new THREE.BufferAttribute(rgb, 3, true));
+    } else {
+        geometry.setAttribute('color', new THREE.BufferAttribute(computeHeightColors(positions), 3));
+    }
+    const material = new THREE.PointsMaterial({ size: 0.025, vertexColors: true, sizeAttenuation: true });
+    pointsObject = new THREE.Points(geometry, material);
+    scene.add(pointsObject);
+}
+
+function setStatus(payload) {
+    document.getElementById('point-count').textContent = Number(payload.point_count || 0).toLocaleString();
+    document.getElementById('frames-received').textContent = Number(payload.frames_received || 0).toLocaleString();
+    document.getElementById('cloud-frame-id').textContent = payload.frame_id || 'Waiting';
+    document.getElementById('coordinate-convention').textContent = payload.frame_id
+        ? MicroK3RosThree.coordinateConvention(payload.frame_id)
+        : 'Waiting';
+    const droppedRow = document.getElementById('dropped-row');
+    droppedRow.classList.toggle('d-none', state.mode !== 'accumulate');
+    document.getElementById('frames-dropped').textContent = Number(payload.frames_dropped_no_pose || 0).toLocaleString();
+    const error = document.getElementById('pointcloud-error');
+    const message = payload.last_error || rendererError || '';
+    error.textContent = message;
+    error.classList.toggle('d-none', !message);
+}
+
+async function fetchJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const contentType = response.headers.get('content-type') || '';
+    const payload = contentType.includes('application/json')
+        ? await response.json()
+        : { error: await response.text() };
+    if (!response.ok) throw new Error(payload.error || 'Request failed');
+    return payload;
+}
+
+function setConnectionUi() {
+    document.getElementById('connection-badge').textContent = state.connected ? 'Connected' : 'Disconnected';
+    document.getElementById('connection-badge').className = `badge ${state.connected ? 'text-bg-success' : 'text-bg-secondary'}`;
+    document.getElementById('connect-button').disabled = state.connected;
+    document.getElementById('disconnect-button').disabled = !state.connected;
+    document.getElementById('reset-button').disabled = !state.connected || state.mode !== 'accumulate';
+}
+
+function persistPointcloudSettings() {
+    localStorage.setItem(pointcloudStorageKey, JSON.stringify({
+        mode: state.mode,
+        topic: document.getElementById('cloud-topic').value.trim(),
+        poseTopic: document.getElementById('pose-topic').value.trim(),
+        voxelSize: document.getElementById('voxel-size').value,
+        maxMapPoints: document.getElementById('max-map-points').value,
+    }));
+}
+
+function pollInterval() { return state.mode === 'live' ? 150 : 1000; }
+function snapshotUrl() {
+    const topic = encodeURIComponent(state.topic).replaceAll('%2F', '/');
+    return state.mode === 'live'
+        ? `/api/ros/pointcloud/live/${topic}/latest?max_points=20000`
+        : `/api/ros/pointcloud/accumulate/${topic}/snapshot`;
+}
+
+async function poll() {
+    if (!state.connected) return;
+    try {
+        const payload = await fetchJson(snapshotUrl());
+        updatePoints(payload);
+        setStatus(payload);
+    } catch (error) {
+        setStatus({ last_error: error.message });
+    }
+}
+
+function startPolling() {
+    window.clearInterval(state.pollId);
+    poll();
+    state.pollId = window.setInterval(poll, pollInterval());
+}
+
+async function connect() {
+    state.topic = document.getElementById('cloud-topic').value.trim();
+    if (!state.topic) return setStatus({ last_error: 'A cloud topic is required.' });
+    const endpoint = state.mode === 'live' ? '/api/ros/pointcloud/live/start' : '/api/ros/pointcloud/accumulate/start';
+    const body = { topic_name: state.topic };
+    if (state.mode === 'accumulate') {
+        body.pose_topic = document.getElementById('pose-topic').value.trim();
+        body.voxel_size = Number(document.getElementById('voxel-size').value);
+        body.max_map_points = Number(document.getElementById('max-map-points').value);
+    }
+    try {
+        await fetchJson(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        state.connected = true;
+        persistPointcloudSettings();
+        setConnectionUi();
+        startPolling();
+    } catch (error) {
+        setStatus({ last_error: error.message });
+    }
+}
+
+async function disconnect() {
+    if (!state.connected) return;
+    const endpoint = state.mode === 'live' ? '/api/ros/pointcloud/live/stop' : '/api/ros/pointcloud/accumulate/stop';
+    try {
+        await fetchJson(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic_name: state.topic }) });
+    } catch (error) {
+        setStatus({ last_error: error.message });
+    } finally {
+        state.connected = false;
+        window.clearInterval(state.pollId);
+        setConnectionUi();
+    }
+}
+
+async function resetMap() {
+    try {
+        await fetchJson('/api/ros/pointcloud/accumulate/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic_name: state.topic }) });
+        clearPoints();
+        setStatus({});
+    } catch (error) {
+        setStatus({ last_error: error.message });
+    }
+}
+
+document.getElementById('connect-button').addEventListener('click', connect);
+document.getElementById('disconnect-button').addEventListener('click', disconnect);
+document.getElementById('reset-button').addEventListener('click', resetMap);
+document.getElementById('rotate-left-button').addEventListener('click', () => rotateView(Math.PI / 2));
+document.getElementById('rotate-right-button').addEventListener('click', () => rotateView(-Math.PI / 2));
+document.getElementById('reset-view-button').addEventListener('click', resetView);
+document.querySelectorAll('input[name="view-mode"]').forEach(input => input.addEventListener('change', async event => {
+    state.mode = event.target.value;
+    document.getElementById('accumulation-options').classList.toggle('d-none', state.mode !== 'accumulate');
+    document.getElementById('dropped-row').classList.toggle('d-none', state.mode !== 'accumulate');
+    clearPoints();
+    setStatus({});
+    persistPointcloudSettings();
+    connect();
+}));
+document.getElementById('cloud-topic').value = savedPointcloudSettings.topic || document.getElementById('cloud-topic').value;
+document.getElementById('pose-topic').value = savedPointcloudSettings.poseTopic || document.getElementById('pose-topic').value;
+document.getElementById('voxel-size').value = savedPointcloudSettings.voxelSize || document.getElementById('voxel-size').value;
+document.getElementById('max-map-points').value = savedPointcloudSettings.maxMapPoints || document.getElementById('max-map-points').value;
+document.getElementById(state.mode === 'accumulate' ? 'accumulate-mode' : 'live-mode').checked = true;
+document.getElementById('accumulation-options').classList.toggle('d-none', state.mode !== 'accumulate');
+document.getElementById('dropped-row').classList.toggle('d-none', state.mode !== 'accumulate');
+setConnectionUi();
+connect();
+</script>
+{% endblock %}

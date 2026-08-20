@@ -11,6 +11,8 @@ from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Float32, Int32, String
 
+from pointcloud_stream import PointCloudAccumulator, PointCloudLiveViewer
+
 
 def _coerce_jsonable(value: Any) -> Any:
     """Recursively normalize ROS values into JSON-serializable types."""
@@ -59,6 +61,9 @@ class MicroK3RosNode(RosNode):
         self.app_state_callback = app_state_callback
         self._watch_lock = threading.RLock()
         self._watched_topics: Dict[str, Dict[str, Any]] = {}
+        self._pointcloud_lock = threading.RLock()
+        self._pointcloud_live_viewers: Dict[str, PointCloudLiveViewer] = {}
+        self._pointcloud_accumulators: Dict[str, PointCloudAccumulator] = {}
 
         # Publishers (Commands to nodes)
         self.cmd_pub = self.create_publisher(String, "microk3/commands", 10)
@@ -213,6 +218,82 @@ class MicroK3RosNode(RosNode):
 
         return _callback
 
+    def start_pointcloud_live(self, topic_name: str) -> Dict[str, Any]:
+        with self._pointcloud_lock:
+            if topic_name in self._pointcloud_live_viewers:
+                return {"success": True, "topic_name": topic_name, "already_started": True}
+            self._pointcloud_live_viewers[topic_name] = PointCloudLiveViewer(self, topic_name)
+            return {"success": True, "topic_name": topic_name}
+
+    def stop_pointcloud_live(self, topic_name: str) -> Dict[str, Any]:
+        with self._pointcloud_lock:
+            viewer = self._pointcloud_live_viewers.pop(topic_name, None)
+            if viewer is None:
+                return {"success": False, "error": f"Live viewer for {topic_name} is not active"}
+            viewer.shutdown()
+            return {"success": True, "topic_name": topic_name}
+
+    def get_pointcloud_live_snapshot(self, topic_name: str, max_points: int = 20000):
+        with self._pointcloud_lock:
+            viewer = self._pointcloud_live_viewers.get(topic_name)
+        if viewer is None:
+            return {"active": False}
+        return viewer.snapshot(max_points)
+
+    def start_pointcloud_accumulation(
+        self,
+        topic_name: str,
+        pose_topic: str = "/zed/zed_node/pose",
+        voxel_size: float = 0.05,
+        max_map_points: int = 500000,
+    ) -> Dict[str, Any]:
+        with self._pointcloud_lock:
+            if topic_name in self._pointcloud_accumulators:
+                return {"success": True, "topic_name": topic_name, "already_started": True}
+            self._pointcloud_accumulators[topic_name] = PointCloudAccumulator(
+                self,
+                topic_name,
+                pose_topic=pose_topic,
+                voxel_size=voxel_size,
+                max_map_points=max_map_points,
+            )
+            return {"success": True, "topic_name": topic_name, "pose_topic": pose_topic}
+
+    def stop_pointcloud_accumulation(self, topic_name: str) -> Dict[str, Any]:
+        with self._pointcloud_lock:
+            accumulator = self._pointcloud_accumulators.pop(topic_name, None)
+            if accumulator is None:
+                return {"success": False, "error": f"Accumulator for {topic_name} is not active"}
+            accumulator.shutdown()
+            return {"success": True, "topic_name": topic_name}
+
+    def reset_pointcloud_accumulation(self, topic_name: str) -> Dict[str, Any]:
+        with self._pointcloud_lock:
+            accumulator = self._pointcloud_accumulators.get(topic_name)
+        if accumulator is None:
+            return {"success": False, "error": f"Accumulator for {topic_name} is not active"}
+        accumulator.reset()
+        return {"success": True, "topic_name": topic_name}
+
+    def get_pointcloud_accumulation_snapshot(self, topic_name: str):
+        with self._pointcloud_lock:
+            accumulator = self._pointcloud_accumulators.get(topic_name)
+        if accumulator is None:
+            return {"active": False}
+        return accumulator.snapshot()
+
+    def destroy_node(self):
+        with self._pointcloud_lock:
+            live_viewers = list(self._pointcloud_live_viewers.values())
+            accumulators = list(self._pointcloud_accumulators.values())
+            self._pointcloud_live_viewers.clear()
+            self._pointcloud_accumulators.clear()
+        for viewer in live_viewers:
+            viewer.shutdown()
+        for accumulator in accumulators:
+            accumulator.shutdown()
+        return super().destroy_node()
+
 
 class ROS2Manager:
     def __init__(self, update_callback):
@@ -270,3 +351,53 @@ class ROS2Manager:
             if not self.running or not self.ros_node:
                 return {"success": False, "error": "ROS 2 manager is not running"}
             return self.ros_node.unwatch_topic(topic_name)
+
+    def start_pointcloud_live(self, topic_name: str) -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.start_pointcloud_live(topic_name)
+
+    def stop_pointcloud_live(self, topic_name: str) -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.stop_pointcloud_live(topic_name)
+
+    def get_pointcloud_live_snapshot(self, topic_name: str, max_points: int = 20000):
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return None
+            return self.ros_node.get_pointcloud_live_snapshot(topic_name, max_points)
+
+    def start_pointcloud_accumulation(
+        self,
+        topic_name: str,
+        pose_topic: str = "/zed/zed_node/pose",
+        voxel_size: float = 0.05,
+        max_map_points: int = 500000,
+    ) -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.start_pointcloud_accumulation(
+                topic_name, pose_topic, voxel_size, max_map_points
+            )
+
+    def stop_pointcloud_accumulation(self, topic_name: str) -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.stop_pointcloud_accumulation(topic_name)
+
+    def reset_pointcloud_accumulation(self, topic_name: str) -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.reset_pointcloud_accumulation(topic_name)
+
+    def get_pointcloud_accumulation_snapshot(self, topic_name: str):
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return None
+            return self.ros_node.get_pointcloud_accumulation_snapshot(topic_name)

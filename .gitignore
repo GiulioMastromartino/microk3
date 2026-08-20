@@ -70,3 +70,4 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+Model3D_mesh2.obj

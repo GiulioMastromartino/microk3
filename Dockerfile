@@ -10,10 +10,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-venv \
+    python3-numpy \
     gcc \
     ros-humble-rmw-cyclonedds-cpp \
+    ros-humble-geometry-msgs \
     ros-humble-std-msgs \
     ros-humble-sensor-msgs \
+    ros-humble-sensor-msgs-py \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (for caching)

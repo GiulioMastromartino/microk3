@@ -1,9 +1,10 @@
-from flask import Flask, render_template, jsonify, request, abort
+from flask import Flask, render_template, jsonify, request, abort, send_file
 from flask_httpauth import HTTPBasicAuth
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 from dotenv import load_dotenv
+from base64 import b64encode
 import json
 import os
 import logging
@@ -230,6 +231,64 @@ def require_json(f):
             return jsonify({"error": "Content-Type must be application/json"}), 400
         return f(*args, **kwargs)
     return wrapper
+
+
+def _normalize_topic_name(value: Any) -> str:
+    topic_name = str(value or "").strip()
+    return "/" + topic_name.lstrip("/") if topic_name else ""
+
+
+def _serialize_pointcloud_snapshot(topic_name: str, snapshot: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Encode binary point-cloud arrays for efficient browser transport."""
+    if snapshot is None:
+        return {
+            "topic_name": topic_name,
+            "frame_id": None,
+            "point_count": 0,
+            "has_color": False,
+            "positions_base64": "",
+            "colors_base64": None,
+            "frames_received": 0,
+            "last_error": "Waiting for a PointCloud2 frame.",
+        }
+
+    points = snapshot.get("xyz", snapshot.get("points"))
+    colors = snapshot.get("colors")
+    point_count = int(snapshot.get("point_count_after_downsample", snapshot.get("point_count", 0)))
+    payload = {
+        "topic_name": topic_name,
+        "frame_id": snapshot.get("frame_id"),
+        "point_count": point_count,
+        "has_color": bool(snapshot.get("has_color") and colors is not None),
+        "positions_base64": b64encode(
+            points.astype("float32", copy=False).tobytes()
+        ).decode("ascii"),
+        "colors_base64": (
+            b64encode(colors.astype("uint8", copy=False).tobytes()).decode("ascii")
+            if colors is not None
+            else None
+        ),
+        "frames_received": int(snapshot.get("frames_received", 0)),
+        "last_error": snapshot.get("last_error"),
+    }
+    if "frames_dropped_no_pose" in snapshot:
+        payload["frames_dropped_no_pose"] = int(snapshot["frames_dropped_no_pose"])
+    if "point_count_after_downsample" in snapshot:
+        payload["source_point_count"] = int(snapshot.get("point_count", point_count))
+    return payload
+
+
+def _parse_pointcloud_parameters(data: Dict[str, Any]):
+    try:
+        voxel_size = float(data.get("voxel_size", 0.05))
+        max_map_points = int(data.get("max_map_points", 500000))
+    except (TypeError, ValueError):
+        return None, None, "voxel_size must be a number and max_map_points an integer"
+    if voxel_size <= 0 or voxel_size > 10:
+        return None, None, "voxel_size must be greater than 0 and at most 10"
+    if max_map_points < 1 or max_map_points > 2_000_000:
+        return None, None, "max_map_points must be between 1 and 2000000"
+    return voxel_size, max_map_points, None
 
 
 def get_node_by_id(node_id: int) -> Optional[Node]:
@@ -536,6 +595,32 @@ def ros_page():
         return "System initializing...", 503
 
     return render_template('ros.html', ros_state=get_ros_graph_payload())
+
+
+@app.route('/pointcloud')
+def pointcloud_page():
+    """Dedicated live and accumulated PointCloud2 viewer."""
+    if not system_data:
+        return "System initializing...", 503
+    return render_template('pointcloud.html')
+
+
+@app.route('/rover-map')
+def rover_map_page():
+    """Interactive static mesh with the rover pose marker."""
+    if not system_data:
+        return "System initializing...", 503
+    return render_template('rover_map.html')
+
+
+@app.route('/assets/models/Model3D_mesh2.obj')
+def rover_map_mesh_asset():
+    """Serve the supplied mesh without duplicating its large source file."""
+    return send_file(
+        Path(__file__).with_name('Model3D_mesh2.obj'),
+        mimetype='text/plain',
+        conditional=True,
+    )
 
 
 @app.route('/failures')
@@ -878,6 +963,124 @@ def api_ros_unwatch_topic():
     except Exception as e:
         logger.error(f"Error unwatching ROS topic: {e}")
         return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/ros/pointcloud/live/start', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_pointcloud_live_start():
+    try:
+        data = request.get_json() or {}
+        topic_name = _normalize_topic_name(data.get("topic_name"))
+        if not topic_name:
+            return jsonify({"error": "Missing required field: topic_name"}), 400
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.start_pointcloud_live(topic_name)
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as exc:
+        logger.exception("Failed to start live point-cloud viewer")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route('/api/ros/pointcloud/live/stop', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_pointcloud_live_stop():
+    data = request.get_json() or {}
+    topic_name = _normalize_topic_name(data.get("topic_name"))
+    if not topic_name:
+        return jsonify({"error": "Missing required field: topic_name"}), 400
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    result = ros_manager.stop_pointcloud_live(topic_name)
+    return jsonify(result), 200 if result.get("success") else 404
+
+
+@app.route('/api/ros/pointcloud/live/<path:topic_name>/latest')
+@limiter.limit("240 per minute")
+def api_pointcloud_live_latest(topic_name: str):
+    normalized_name = _normalize_topic_name(topic_name)
+    try:
+        max_points = int(request.args.get("max_points", 20000))
+    except ValueError:
+        return jsonify({"error": "max_points must be an integer"}), 400
+    if max_points < 1 or max_points > 200000:
+        return jsonify({"error": "max_points must be between 1 and 200000"}), 400
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    snapshot = ros_manager.get_pointcloud_live_snapshot(normalized_name, max_points)
+    if snapshot is not None and snapshot.get("active") is False:
+        return jsonify({"error": f"Live viewer for {normalized_name} is not active"}), 404
+    return jsonify(_serialize_pointcloud_snapshot(normalized_name, snapshot)), 200
+
+
+@app.route('/api/ros/pointcloud/accumulate/start', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_pointcloud_accumulation_start():
+    try:
+        data = request.get_json() or {}
+        topic_name = _normalize_topic_name(data.get("topic_name"))
+        pose_topic = _normalize_topic_name(data.get("pose_topic", "/zed/zed_node/pose"))
+        if not topic_name:
+            return jsonify({"error": "Missing required field: topic_name"}), 400
+        if not pose_topic:
+            return jsonify({"error": "pose_topic must not be empty"}), 400
+        voxel_size, max_map_points, error = _parse_pointcloud_parameters(data)
+        if error:
+            return jsonify({"error": error}), 400
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.start_pointcloud_accumulation(
+            topic_name, pose_topic, voxel_size, max_map_points
+        )
+        return jsonify(result), 200 if result.get("success") else 400
+    except Exception as exc:
+        logger.exception("Failed to start point-cloud accumulation")
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route('/api/ros/pointcloud/accumulate/stop', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_pointcloud_accumulation_stop():
+    data = request.get_json() or {}
+    topic_name = _normalize_topic_name(data.get("topic_name"))
+    if not topic_name:
+        return jsonify({"error": "Missing required field: topic_name"}), 400
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    result = ros_manager.stop_pointcloud_accumulation(topic_name)
+    return jsonify(result), 200 if result.get("success") else 404
+
+
+@app.route('/api/ros/pointcloud/accumulate/reset', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_pointcloud_accumulation_reset():
+    data = request.get_json() or {}
+    topic_name = _normalize_topic_name(data.get("topic_name"))
+    if not topic_name:
+        return jsonify({"error": "Missing required field: topic_name"}), 400
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    result = ros_manager.reset_pointcloud_accumulation(topic_name)
+    return jsonify(result), 200 if result.get("success") else 404
+
+
+@app.route('/api/ros/pointcloud/accumulate/<path:topic_name>/snapshot')
+@limiter.limit("90 per minute")
+def api_pointcloud_accumulation_snapshot(topic_name: str):
+    normalized_name = _normalize_topic_name(topic_name)
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    snapshot = ros_manager.get_pointcloud_accumulation_snapshot(normalized_name)
+    if snapshot is not None and snapshot.get("active") is False:
+        return jsonify({"error": f"Accumulator for {normalized_name} is not active"}), 404
+    payload = _serialize_pointcloud_snapshot(normalized_name, snapshot)
+    payload.setdefault("frames_dropped_no_pose", 0)
+    return jsonify(payload), 200
 
 
 # ============================================================================
