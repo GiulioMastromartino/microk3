@@ -1,6 +1,7 @@
 # Core
 Flask==3.0.2
 Werkzeug==3.0.1
+flask-sock==0.7.0
 
 # Environment
 python-dotenv==1.0.1
@@ -8,6 +9,7 @@ docker==7.1.0
 
 # Security
 Flask-HTTPAuth==4.8.0
+paramiko==3.5.1
 
 # Rate Limiting
 Flask-Limiter==3.5.1

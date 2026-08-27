@@ -2,7 +2,9 @@ from flask import Flask, render_template, jsonify, request, abort, send_file
 from flask_httpauth import HTTPBasicAuth
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from flask_sock import Sock
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 from base64 import b64encode
 import json
@@ -15,6 +17,7 @@ from typing import Dict, List, Any, Optional
 from functools import wraps
 import threading
 import sys
+import time
 import traceback
 
 from models.node import Node
@@ -26,10 +29,14 @@ from metrics import (
     new_metrics_state,
 )
 from config import get_config
+from ssh_terminal import SSHAuthenticationFailed, SSHConnectionFailed, SSHPasswordRequired, SSHSessionManager
 
 # Initialize Flask app
 app = Flask(__name__, template_folder='templates')
 app.config.from_object(get_config())
+if app.config['TRUSTED_PROXY_HOPS']:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=app.config['TRUSTED_PROXY_HOPS'])
+sock = Sock(app)
 
 # Setup logging first to capture startup errors
 log_file_path = Path(app.config['LOG_FILE'])
@@ -84,12 +91,31 @@ docker_stats_collector = None
 ROS_WATCH_LIMIT = 10
 ROS_SAMPLE_HISTORY_LIMIT = 20
 ros_state_lock = threading.RLock()
+SSH_SESSION_COOKIE = 'ssh_session_id'
+ssh_manager = None
+if os.environ.get('SSH_TERMINAL_ENABLED', '').lower() == 'true':
+    try:
+        ssh_manager = SSHSessionManager(
+            idle_timeout_sec=int(os.environ.get('SSH_TERMINAL_IDLE_TIMEOUT_SEC', '1800'))
+        )
+        logger.info('SSH terminal support is enabled')
+    except (KeyError, ValueError, OSError) as exc:
+        logger.error('SSH terminal is disabled because its configuration is invalid: %s', exc)
 
 @auth.verify_password
 def verify_password(username: str, password: str) -> Optional[str]:
     """Verify user credentials"""
     if username in users and check_password_hash(users.get(username), password):
         return username
+    return None
+
+
+def _ssh_terminal_available():
+    """Return a secure failure response, or None when terminal access is permitted."""
+    if ssh_manager is None:
+        return jsonify({'error': 'SSH terminal is not configured'}), 503
+    if not request.is_secure:
+        return jsonify({'error': 'SSH terminal requires HTTPS'}), 403
     return None
 
 
@@ -613,6 +639,14 @@ def rover_map_page():
     return render_template('rover_map.html')
 
 
+@app.route('/occupancy-map')
+def occupancy_map_page():
+    """Dedicated 2D viewer for nav_msgs/OccupancyGrid topics."""
+    if not system_data:
+        return "System initializing...", 503
+    return render_template('occupancy_map.html')
+
+
 @app.route('/assets/models/Model3D_mesh2.obj')
 def rover_map_mesh_asset():
     """Serve the supplied mesh without duplicating its large source file."""
@@ -1081,6 +1115,158 @@ def api_pointcloud_accumulation_snapshot(topic_name: str):
     payload = _serialize_pointcloud_snapshot(normalized_name, snapshot)
     payload.setdefault("frames_dropped_no_pose", 0)
     return jsonify(payload), 200
+
+
+@app.route('/api/ros/occupancy_map/subscribe', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_occupancy_map_subscribe():
+    data = request.get_json() or {}
+    topic_name = _normalize_topic_name(data.get("topic_name", "/map"))
+    if not topic_name:
+        return jsonify({"error": "topic_name must not be empty"}), 400
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    result = ros_manager.start_occupancy_map(topic_name)
+    return jsonify(result), 200 if result.get("success") else 400
+
+
+@app.route('/api/ros/occupancy_map/unsubscribe', methods=['POST'])
+@require_json
+@limiter.limit("20 per minute")
+def api_occupancy_map_unsubscribe():
+    data = request.get_json() or {}
+    topic_name = _normalize_topic_name(data.get("topic_name", "/map"))
+    if not topic_name:
+        return jsonify({"error": "topic_name must not be empty"}), 400
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    result = ros_manager.stop_occupancy_map(topic_name)
+    return jsonify(result), 200 if result.get("success") else 404
+
+
+@app.route('/api/ros/occupancy_map/<path:topic_name>/latest')
+@limiter.limit("120 per minute")
+def api_occupancy_map_latest(topic_name: str):
+    normalized_name = _normalize_topic_name(topic_name)
+    if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+        return jsonify({"error": "ROS 2 is not connected"}), 503
+    snapshot = ros_manager.get_occupancy_map_snapshot(normalized_name)
+    if snapshot is not None and snapshot.get("active") is False:
+        return jsonify({"error": f"Occupancy map viewer for {normalized_name} is not active"}), 404
+    if snapshot is None:
+        return jsonify({
+            "width": 0,
+            "height": 0,
+            "resolution": None,
+            "origin": None,
+            "frame_id": None,
+            "data_base64": "",
+            "frames_received": 0,
+            "last_error": "Waiting for an OccupancyGrid message.",
+        }), 200
+    return jsonify(snapshot), 200
+
+
+@app.route('/api/ssh-terminal/session-id')
+@auth.login_required
+def api_ssh_terminal_session_id():
+    unavailable = _ssh_terminal_available()
+    if unavailable:
+        return unavailable
+    session_id = request.cookies.get(SSH_SESSION_COOKIE)
+    if not session_id:
+        session_id = os.urandom(32).hex()
+    response = jsonify({'success': True})
+    response.set_cookie(
+        SSH_SESSION_COOKIE,
+        session_id,
+        max_age=int(os.environ.get('SSH_TERMINAL_IDLE_TIMEOUT_SEC', '1800')),
+        secure=True,
+        httponly=True,
+        samesite='Lax',
+        path='/',
+    )
+    return response
+
+
+@sock.route('/ws/ssh-terminal')
+def ssh_terminal_ws(ws):
+    session_id = request.cookies.get(SSH_SESSION_COOKIE)
+    if not session_id:
+        ws.close(1008, 'SSH terminal session is missing; authenticate first')
+        return
+    unavailable = _ssh_terminal_available()
+    if unavailable:
+        ws.close(1008, 'SSH terminal unavailable')
+        return
+
+    try:
+        terminal_session = ssh_manager.get_or_create(session_id)
+    except SSHPasswordRequired:
+        ws.send(json.dumps({'type': 'password_required'}))
+        terminal_session = None
+        while terminal_session is None:
+            message = ws.receive()
+            if message is None:
+                return
+            try:
+                payload = json.loads(message)
+                password = payload.get('data') if payload.get('type') == 'password' else None
+                if not isinstance(password, str):
+                    raise ValueError('SSH password is required')
+                terminal_session = ssh_manager.get_or_create(session_id, password=password)
+            except SSHAuthenticationFailed:
+                ws.send(json.dumps({'type': 'error', 'data': 'SSH authentication failed'}))
+                ws.send(json.dumps({'type': 'password_required'}))
+            except SSHConnectionFailed:
+                ws.send(json.dumps({'type': 'error', 'data': 'Configured SSH host is unreachable'}))
+                return
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                ws.send(json.dumps({'type': 'error', 'data': str(exc)}))
+            except Exception:
+                logger.exception('Failed to authenticate SSH terminal session')
+                ws.send(json.dumps({'type': 'error', 'data': 'SSH authentication failed'}))
+                return
+    except Exception as exc:
+        logger.exception('Failed to open SSH terminal session')
+        ws.send(json.dumps({'type': 'error', 'data': str(exc)}))
+        ws.close(1011, 'SSH terminal connection failed')
+        return
+
+    stop_reader = threading.Event()
+    offset, scrollback = terminal_session.output_snapshot()
+    if scrollback:
+        ws.send(json.dumps({'type': 'output', 'data': scrollback.decode('utf-8', errors='replace')}))
+
+    def reader_loop():
+        nonlocal offset
+        try:
+            while not stop_reader.is_set() and terminal_session.is_alive():
+                offset, data = terminal_session.output_since(offset)
+                if data:
+                    ws.send(json.dumps({'type': 'output', 'data': data.decode('utf-8', errors='replace')}))
+                else:
+                    time.sleep(0.05)
+        except Exception:
+            stop_reader.set()
+
+    reader_thread = threading.Thread(target=reader_loop, daemon=True)
+    reader_thread.start()
+    try:
+        while not stop_reader.is_set():
+            message = ws.receive()
+            if message is None:
+                break
+            payload = json.loads(message)
+            if payload.get('type') == 'input' and isinstance(payload.get('data'), str):
+                terminal_session.write(payload['data'])
+            elif payload.get('type') == 'resize':
+                terminal_session.resize(payload.get('cols', 80), payload.get('rows', 24))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        logger.warning('Invalid SSH terminal WebSocket message: %s', exc)
+    finally:
+        stop_reader.set()
 
 
 # ============================================================================

@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    .occupancy-map-layout { min-height: calc(100vh - 3rem); }
+    .occupancy-map-sidebar { border-right: 1px solid #d9e0e6; background: #f7f9fb; }
+    .occupancy-map-viewport { min-height: 580px; height: calc(100vh - 3rem); overflow: hidden; background: #20262b; cursor: grab; touch-action: none; }
+    .occupancy-map-viewport.is-dragging { cursor: grabbing; }
+    .occupancy-map-stage { width: 100%; height: 100%; display: grid; place-items: center; overflow: visible; }
+    #occupancy-map-canvas { display: block; max-width: none; image-rendering: pixelated; image-rendering: crisp-edges; transform-origin: center; }
+    .occupancy-map-stat { font-variant-numeric: tabular-nums; }
+    @media (max-width: 991px) {
+        .occupancy-map-sidebar { border-right: 0; border-bottom: 1px solid #d9e0e6; }
+        .occupancy-map-viewport { min-height: 500px; height: 65vh; }
+    }
+</style>
+
+<div class="row g-0 occupancy-map-layout">
+    <aside class="col-lg-3 occupancy-map-sidebar p-3">
+        <div class="d-flex align-items-center justify-content-between mb-4">
+            <h2 class="h5 mb-0"><i class="fas fa-border-all me-2"></i>Occupancy Map</h2>
+            <span id="occupancy-badge" class="badge text-bg-secondary">Disconnected</span>
+        </div>
+
+        <label for="occupancy-topic" class="form-label small fw-semibold">Map topic</label>
+        <input id="occupancy-topic" class="form-control mb-3" value="/map">
+        <div class="d-grid gap-2 mb-4">
+            <button id="connect-button" class="btn btn-primary" type="button"><i class="fas fa-plug me-1"></i>Connect</button>
+            <button id="disconnect-button" class="btn btn-outline-secondary" type="button" disabled><i class="fas fa-link-slash me-1"></i>Disconnect</button>
+        </div>
+
+        <div class="border-top pt-3 small">
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Resolution</span><strong id="resolution" class="occupancy-map-stat">Waiting</strong></div>
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Grid</span><strong id="grid-size" class="occupancy-map-stat">Waiting</strong></div>
+            <div class="d-flex justify-content-between mb-2"><span class="text-muted">Frames</span><strong id="frames-received" class="occupancy-map-stat">0</strong></div>
+            <div class="mb-2"><span class="text-muted">Frame</span><div id="map-frame-id" class="text-break">Waiting</div></div>
+            <div class="alert alert-info small py-2 mt-3 mb-0">Use the mouse wheel to zoom and drag the map to pan.</div>
+            <div id="occupancy-error" class="alert alert-warning small py-2 mt-3 d-none mb-0" role="alert"></div>
+        </div>
+    </aside>
+    <section id="occupancy-map-viewport" class="col-lg-9 occupancy-map-viewport position-relative">
+        <div id="occupancy-map-stage" class="occupancy-map-stage">
+            <canvas id="occupancy-map-canvas" aria-label="Occupancy grid map"></canvas>
+        </div>
+    </section>
+</div>
+
+<script>
+const state = { connected: false, topic: '', pollId: null, scale: 1, offsetX: 0, offsetY: 0, lastFrame: 0 };
+const topicInput = document.getElementById('occupancy-topic');
+const connectButton = document.getElementById('connect-button');
+const disconnectButton = document.getElementById('disconnect-button');
+const badge = document.getElementById('occupancy-badge');
+const viewport = document.getElementById('occupancy-map-viewport');
+const canvas = document.getElementById('occupancy-map-canvas');
+const context = canvas.getContext('2d');
+
+function setError(message) {
+    const element = document.getElementById('occupancy-error');
+    element.textContent = message || '';
+    element.classList.toggle('d-none', !message);
+}
+
+function setConnected(connected) {
+    state.connected = connected;
+    badge.textContent = connected ? 'Connected' : 'Disconnected';
+    badge.className = `badge ${connected ? 'text-bg-success' : 'text-bg-secondary'}`;
+    connectButton.disabled = connected;
+    disconnectButton.disabled = !connected;
+    topicInput.disabled = connected;
+}
+
+function normalizeTopic(value) {
+    const topic = value.trim().replace(/^\/+/, '');
+    return topic ? `/${topic}` : '';
+}
+
+function latestUrl() {
+    return `/api/ros/occupancy_map/${encodeURIComponent(state.topic.replace(/^\//, ''))}/latest`;
+}
+
+function decodeGrid(dataBase64) {
+    const decoded = atob(dataBase64);
+    const bytes = new Uint8Array(decoded.length);
+    for (let index = 0; index < decoded.length; index++) bytes[index] = decoded.charCodeAt(index);
+    return new Int8Array(bytes.buffer);
+}
+
+function updateTransform() {
+    canvas.style.transform = `translate(${state.offsetX}px, ${state.offsetY}px) scale(${state.scale})`;
+}
+
+function drawMap(snapshot) {
+    const { width, height, data_base64: dataBase64 } = snapshot;
+    if (!width || !height || !dataBase64) return;
+    const grid = decodeGrid(dataBase64);
+    if (grid.length !== width * height) {
+        setError(`Invalid grid payload: expected ${width * height} cells, received ${grid.length}.`);
+        return;
+    }
+    canvas.width = width;
+    canvas.height = height;
+    const imageData = context.createImageData(width, height);
+    for (let row = 0; row < height; row++) {
+        for (let col = 0; col < width; col++) {
+            const value = grid[row * width + col];
+            const canvasRow = height - 1 - row;
+            const pixelIndex = (canvasRow * width + col) * 4;
+            const shade = value === -1 ? 128 : 255 - Math.round((Math.max(0, Math.min(100, value)) / 100) * 255);
+            imageData.data[pixelIndex] = shade;
+            imageData.data[pixelIndex + 1] = shade;
+            imageData.data[pixelIndex + 2] = shade;
+            imageData.data[pixelIndex + 3] = 255;
+        }
+    }
+    context.putImageData(imageData, 0, 0);
+    const fitScale = Math.min((viewport.clientWidth * 0.9) / width, (viewport.clientHeight * 0.9) / height, 4);
+    if (state.lastFrame === 0) state.scale = Math.max(fitScale, 0.1);
+    state.lastFrame = snapshot.frames_received;
+    updateTransform();
+}
+
+function updateStatus(snapshot) {
+    document.getElementById('resolution').textContent = snapshot.resolution == null ? 'Waiting' : `${snapshot.resolution} m/cell`;
+    document.getElementById('grid-size').textContent = snapshot.width && snapshot.height ? `${snapshot.width} x ${snapshot.height}` : 'Waiting';
+    document.getElementById('frames-received').textContent = snapshot.frames_received || 0;
+    document.getElementById('map-frame-id').textContent = snapshot.frame_id || 'Waiting';
+    setError(snapshot.last_error);
+}
+
+async function poll() {
+    if (!state.connected) return;
+    try {
+        const response = await fetch(latestUrl());
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+        updateStatus(payload);
+        if (payload.frames_received !== state.lastFrame) drawMap(payload);
+    } catch (error) {
+        setError(error.message);
+    }
+}
+
+async function connect() {
+    const topic = normalizeTopic(topicInput.value);
+    if (!topic) {
+        setError('Map topic is required.');
+        return;
+    }
+    try {
+        const response = await fetch('/api/ros/occupancy_map/subscribe', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic_name: topic }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
+        state.topic = topic;
+        state.lastFrame = 0;
+        state.scale = 1;
+        state.offsetX = 0;
+        state.offsetY = 0;
+        setConnected(true);
+        setError('');
+        await poll();
+        state.pollId = window.setInterval(poll, 1000);
+    } catch (error) {
+        setError(error.message);
+    }
+}
+
+async function disconnect() {
+    try {
+        await fetch('/api/ros/occupancy_map/unsubscribe', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic_name: state.topic }),
+        });
+    } finally {
+        window.clearInterval(state.pollId);
+        state.pollId = null;
+        setConnected(false);
+    }
+}
+
+connectButton.addEventListener('click', connect);
+disconnectButton.addEventListener('click', disconnect);
+window.addEventListener('beforeunload', () => { if (state.connected) disconnect(); });
+
+viewport.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const nextScale = state.scale * (event.deltaY < 0 ? 1.1 : 1 / 1.1);
+    state.scale = Math.max(0.05, Math.min(25, nextScale));
+    updateTransform();
+}, { passive: false });
+
+let dragStart = null;
+viewport.addEventListener('pointerdown', (event) => {
+    dragStart = { x: event.clientX, y: event.clientY, offsetX: state.offsetX, offsetY: state.offsetY };
+    viewport.classList.add('is-dragging');
+    viewport.setPointerCapture(event.pointerId);
+});
+viewport.addEventListener('pointermove', (event) => {
+    if (!dragStart) return;
+    state.offsetX = dragStart.offsetX + event.clientX - dragStart.x;
+    state.offsetY = dragStart.offsetY + event.clientY - dragStart.y;
+    updateTransform();
+});
+function stopDrag(event) {
+    dragStart = null;
+    viewport.classList.remove('is-dragging');
+    if (viewport.hasPointerCapture(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
+}
+viewport.addEventListener('pointerup', stopDrag);
+viewport.addEventListener('pointercancel', stopDrag);
+</script>
+{% endblock %}

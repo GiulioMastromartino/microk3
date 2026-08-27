@@ -3,6 +3,139 @@ body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 }
 
+.ssh-terminal-toggle {
+    position: fixed;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    z-index: 1050;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 50%;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+}
+
+.ssh-terminal-panel {
+    position: fixed;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    z-index: 1051;
+    width: min(720px, calc(100vw - 2.5rem));
+    height: min(460px, calc(100vh - 2.5rem));
+    min-width: 320px;
+    min-height: 220px;
+    display: flex;
+    flex-direction: column;
+    resize: both;
+    overflow: hidden;
+    background: #111820;
+    border: 1px solid #3d4b55;
+    border-radius: 6px;
+    box-shadow: 0 14px 36px rgba(0, 0, 0, 0.36);
+}
+
+.ssh-terminal-panel.is-maximized {
+    top: 1.25rem;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    left: 1.25rem;
+    width: auto;
+    height: auto;
+    resize: none;
+}
+
+.ssh-terminal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.45rem 0.65rem;
+    color: #f3f6f8;
+    background: #27343d;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.ssh-terminal-header-actions {
+    display: flex;
+    gap: 0.35rem;
+}
+
+.ssh-terminal-status-row {
+    display: flex;
+    align-items: center;
+    background: #1b252c;
+}
+
+.ssh-terminal-status {
+    flex: 1;
+    padding: 0.25rem 0.65rem;
+    color: #9fb2bf;
+    font-size: 0.75rem;
+}
+
+.ssh-terminal-retry {
+    margin-right: 0.45rem;
+    padding: 0.1rem 0.4rem;
+    font-size: 0.7rem;
+}
+
+.ssh-terminal-status.is-error {
+    color: #ffb4ac;
+}
+
+.ssh-terminal-password {
+    padding: 0.55rem 0.65rem;
+    color: #dce5ea;
+    background: #1b252c;
+    border-top: 1px solid #3d4b55;
+    font-size: 0.78rem;
+}
+
+.ssh-terminal-password label {
+    display: block;
+    margin-bottom: 0.3rem;
+}
+
+.ssh-terminal-password-controls {
+    display: flex;
+    gap: 0.4rem;
+}
+
+.ssh-terminal-access-controls {
+    display: grid;
+    grid-template-columns: minmax(5rem, 1fr) minmax(5rem, 1fr) auto;
+    gap: 0.4rem;
+}
+
+.ssh-terminal-password input {
+    min-width: 0;
+    flex: 1;
+    padding: 0.25rem 0.4rem;
+    color: #f3f6f8;
+    background: #111820;
+    border: 1px solid #526672;
+    border-radius: 3px;
+}
+
+@media (max-width: 480px) {
+    .ssh-terminal-access-controls {
+        grid-template-columns: 1fr auto;
+    }
+
+    .ssh-terminal-access-controls input:first-child {
+        grid-column: 1 / -1;
+    }
+}
+
+#ssh-terminal-host {
+    flex: 1;
+    min-height: 0;
+    padding: 0.45rem;
+}
+
+#ssh-terminal-host .xterm {
+    height: 100%;
+}
+
 .sidebar {
     background: linear-gradient(180deg, #2c3e50, #1a2530);
     color: white;

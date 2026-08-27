@@ -1,0 +1,11 @@
+{
+    servers {
+        protocols h1
+    }
+}
+
+https://localhost {
+    tls internal
+
+    reverse_proxy microk3:5050
+}

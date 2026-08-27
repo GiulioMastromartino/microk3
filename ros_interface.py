@@ -11,6 +11,7 @@ from rosidl_runtime_py.utilities import get_message
 from sensor_msgs.msg import BatteryState
 from std_msgs.msg import Float32, Int32, String
 
+from occupancy_map_viewer import OccupancyMapViewer
 from pointcloud_stream import PointCloudAccumulator, PointCloudLiveViewer
 
 
@@ -64,6 +65,8 @@ class MicroK3RosNode(RosNode):
         self._pointcloud_lock = threading.RLock()
         self._pointcloud_live_viewers: Dict[str, PointCloudLiveViewer] = {}
         self._pointcloud_accumulators: Dict[str, PointCloudAccumulator] = {}
+        self._occupancy_map_lock = threading.RLock()
+        self._occupancy_map_viewers: Dict[str, OccupancyMapViewer] = {}
 
         # Publishers (Commands to nodes)
         self.cmd_pub = self.create_publisher(String, "microk3/commands", 10)
@@ -282,16 +285,43 @@ class MicroK3RosNode(RosNode):
             return {"active": False}
         return accumulator.snapshot()
 
+    def start_occupancy_map(self, topic_name: str = "/map") -> Dict[str, Any]:
+        with self._occupancy_map_lock:
+            if topic_name in self._occupancy_map_viewers:
+                return {"success": True, "topic_name": topic_name, "already_started": True}
+            self._occupancy_map_viewers[topic_name] = OccupancyMapViewer(self, topic_name)
+            return {"success": True, "topic_name": topic_name}
+
+    def stop_occupancy_map(self, topic_name: str) -> Dict[str, Any]:
+        with self._occupancy_map_lock:
+            viewer = self._occupancy_map_viewers.pop(topic_name, None)
+            if viewer is None:
+                return {"success": False, "error": f"Occupancy map viewer for {topic_name} is not active"}
+            viewer.shutdown()
+            return {"success": True, "topic_name": topic_name}
+
+    def get_occupancy_map_snapshot(self, topic_name: str):
+        with self._occupancy_map_lock:
+            viewer = self._occupancy_map_viewers.get(topic_name)
+        if viewer is None:
+            return {"active": False}
+        return viewer.snapshot()
+
     def destroy_node(self):
         with self._pointcloud_lock:
             live_viewers = list(self._pointcloud_live_viewers.values())
             accumulators = list(self._pointcloud_accumulators.values())
             self._pointcloud_live_viewers.clear()
             self._pointcloud_accumulators.clear()
+        with self._occupancy_map_lock:
+            occupancy_map_viewers = list(self._occupancy_map_viewers.values())
+            self._occupancy_map_viewers.clear()
         for viewer in live_viewers:
             viewer.shutdown()
         for accumulator in accumulators:
             accumulator.shutdown()
+        for viewer in occupancy_map_viewers:
+            viewer.shutdown()
         return super().destroy_node()
 
 
@@ -401,3 +431,21 @@ class ROS2Manager:
             if not self.running or not self.ros_node:
                 return None
             return self.ros_node.get_pointcloud_accumulation_snapshot(topic_name)
+
+    def start_occupancy_map(self, topic_name: str = "/map") -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.start_occupancy_map(topic_name)
+
+    def stop_occupancy_map(self, topic_name: str) -> Dict[str, Any]:
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return {"success": False, "error": "ROS 2 manager is not running"}
+            return self.ros_node.stop_occupancy_map(topic_name)
+
+    def get_occupancy_map_snapshot(self, topic_name: str):
+        with self._lock:
+            if not self.running or not self.ros_node:
+                return None
+            return self.ros_node.get_occupancy_map_snapshot(topic_name)

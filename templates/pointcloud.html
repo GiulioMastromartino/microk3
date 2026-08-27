@@ -264,7 +264,7 @@ function persistPointcloudSettings() {
     }));
 }
 
-function pollInterval() { return state.mode === 'live' ? 150 : 1000; }
+function pollInterval() { return state.mode === 'live' ? 300 : 1000; }
 function snapshotUrl() {
     const topic = encodeURIComponent(state.topic).replaceAll('%2F', '/');
     return state.mode === 'live'

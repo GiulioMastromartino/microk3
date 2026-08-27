@@ -31,6 +31,7 @@ class Config:
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
     PERMANENT_SESSION_LIFETIME = 3600  # 1 hour
+    TRUSTED_PROXY_HOPS = int(os.environ.get('TRUSTED_PROXY_HOPS', '0'))
     
     # Application settings
     DATA_FILE = os.environ.get('DATA_FILE', str(BASE_DIR / 'data' / 'system_data.json'))

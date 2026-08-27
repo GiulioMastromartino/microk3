@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     ros-humble-rmw-cyclonedds-cpp \
     ros-humble-geometry-msgs \
+    ros-humble-nav-msgs \
     ros-humble-std-msgs \
     ros-humble-sensor-msgs \
     ros-humble-sensor-msgs-py \
@@ -49,6 +50,6 @@ exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 
-# Run with python app.py directly to ensure main block executes (starting ROS manager thread)
-# Gunicorn skips the __main__ block, so the ROS thread was never starting
-CMD ["python3", "app.py"]
+# A single threaded worker preserves the in-memory ROS and SSH session state while
+# providing persistent WebSocket support for Flask-Sock.
+CMD ["gunicorn", "--bind", "0.0.0.0:5050", "--workers", "1", "--threads", "8", "--worker-class", "gthread", "--timeout", "0", "runtime:app"]

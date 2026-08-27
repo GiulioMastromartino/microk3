@@ -3,7 +3,27 @@
         return String(frameId || '').toLowerCase().includes('optical');
     }
 
+    function isZedLeftCameraFrame(frameId) {
+        return String(frameId || '').toLowerCase() === 'zed_left_camera_frame';
+    }
+
+    function levelZedLeftCamera(x, y, z) {
+        // Calibration from the dominant floor plane in zed_left_camera_frame.
+        const pitch = 9.88 * Math.PI / 180;
+        const roll = 9.68 * Math.PI / 180;
+        const cosPitch = Math.cos(pitch);
+        const sinPitch = Math.sin(pitch);
+        const cosRoll = Math.cos(roll);
+        const sinRoll = Math.sin(roll);
+        const leveledX = cosPitch * x + sinPitch * z;
+        const leveledZ = -sinPitch * x + cosPitch * z;
+        return [leveledX, cosRoll * y - sinRoll * leveledZ, sinRoll * y + cosRoll * leveledZ];
+    }
+
     function remapRosToThree(x, y, z, frameId) {
+        if (isZedLeftCameraFrame(frameId)) {
+            [x, y, z] = levelZedLeftCamera(x, y, z);
+        }
         if (isOpticalFrame(frameId)) {
             return [x, -y, -z];
         }
@@ -23,12 +43,16 @@
     }
 
     function coordinateConvention(frameId) {
+        if (isZedLeftCameraFrame(frameId)) {
+            return 'ZED base: leveled -y, z, -x';
+        }
         return isOpticalFrame(frameId) ? 'optical: x, -y, -z' : 'body REP-103: -y, z, -x';
     }
 
     window.MicroK3RosThree = {
         remapRosToThree,
         remapPositionsRosToThree,
+        levelZedLeftCamera,
         coordinateConvention,
     };
 }());

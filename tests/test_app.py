@@ -59,12 +59,32 @@ def test_rover_map_page(client):
     assert b'rover-map-canvas' in response.data
 
 
+def test_occupancy_map_page(client):
+    """Test the independent OccupancyGrid page loads."""
+    response = client.get('/occupancy-map')
+    assert response.status_code == 200
+    assert b'occupancy-map-canvas' in response.data
+
+
 def test_health_check(client):
     """Test health endpoint"""
     response = client.get('/health')
     assert response.status_code == 200
     data = json.loads(response.data)
     assert data['status'] == 'healthy'
+
+
+def test_ssh_terminal_session_id_requires_authentication(client):
+    """The privileged terminal bootstrap endpoint must never be public."""
+    response = client.get('/api/ssh-terminal/session-id')
+    assert response.status_code == 401
+
+
+def test_ssh_terminal_overlay_is_shared_by_base_template(client):
+    response = client.get('/')
+    assert response.status_code == 200
+    assert b'ssh-terminal-toggle' in response.data
+    assert b'/ws/ssh-terminal' in response.data
 
 
 def test_api_nodes(client):
@@ -423,6 +443,58 @@ def test_pointcloud_api_validates_parameters(client):
     )
     assert response.status_code == 400
     assert 'voxel_size' in response.get_json()['error']
+
+
+def test_occupancy_map_api_with_fake_manager(client):
+    import app as microk3_app
+
+    class FakeRosManager:
+        running = True
+
+        def __init__(self):
+            self.subscribed = []
+            self.unsubscribed = []
+
+        def start_occupancy_map(self, topic_name):
+            self.subscribed.append(topic_name)
+            return {'success': True, 'topic_name': topic_name}
+
+        def stop_occupancy_map(self, topic_name):
+            self.unsubscribed.append(topic_name)
+            return {'success': True, 'topic_name': topic_name}
+
+        def get_occupancy_map_snapshot(self, topic_name):
+            assert topic_name == '/map'
+            return {
+                'width': 2,
+                'height': 1,
+                'resolution': 0.05,
+                'origin': {'x': -1.0, 'y': 2.0, 'z': 0.0},
+                'frame_id': 'map',
+                'data_base64': b64encode(np.array([-1, 100], dtype=np.int8).tobytes()).decode('ascii'),
+                'frames_received': 4,
+                'last_error': None,
+            }
+
+    manager = FakeRosManager()
+    microk3_app.ROS_AVAILABLE = True
+    microk3_app.ros_manager = manager
+
+    subscribe = client.post('/api/ros/occupancy_map/subscribe', json={})
+    assert subscribe.status_code == 200
+    assert manager.subscribed == ['/map']
+
+    latest = client.get('/api/ros/occupancy_map/map/latest')
+    assert latest.status_code == 200
+    payload = latest.get_json()
+    assert payload['width'] == 2
+    assert payload['height'] == 1
+    assert payload['data_base64']
+    assert payload['frames_received'] == 4
+
+    unsubscribe = client.post('/api/ros/occupancy_map/unsubscribe', json={'topic_name': 'map'})
+    assert unsubscribe.status_code == 200
+    assert manager.unsubscribed == ['/map']
 
 
 def test_performance_metrics_update_exposed_by_api(client):

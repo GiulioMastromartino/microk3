@@ -12,6 +12,7 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Custom CSS -->
     <link href="{{ url_for('static', filename='css/style.css') }}" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" rel="stylesheet">
 </head>
 <body>
     <div class="container-fluid">
@@ -52,6 +53,12 @@
                             <a class="nav-link {% if request.path == '/rover-map' %}active{% endif %}" href="/rover-map">
                                 <i class="fas fa-map-location-dot me-2"></i>
                                 Rover Map
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.path == '/occupancy-map' %}active{% endif %}" href="/occupancy-map">
+                                <i class="fas fa-border-all me-2"></i>
+                                Occupancy Map
                             </a>
                         </li>
                         <li class="nav-item">
@@ -96,9 +103,238 @@
         </div>
     </div>
 
+    <button id="ssh-terminal-toggle" class="btn btn-dark ssh-terminal-toggle" type="button" title="Open SSH terminal" aria-label="Open SSH terminal">
+        <i class="fas fa-terminal"></i>
+    </button>
+    <section id="ssh-terminal-panel" class="ssh-terminal-panel" aria-label="SSH terminal" hidden>
+        <header class="ssh-terminal-header">
+            <span><i class="fas fa-terminal me-2"></i>SSH Terminal</span>
+            <div class="ssh-terminal-header-actions">
+                <button id="ssh-terminal-maximize" class="btn btn-sm btn-outline-light" type="button" title="Maximize terminal" aria-label="Maximize terminal"><i class="fas fa-expand"></i></button>
+                <button id="ssh-terminal-close" class="btn btn-sm btn-outline-light" type="button" title="Close terminal" aria-label="Close terminal"><i class="fas fa-xmark"></i></button>
+            </div>
+        </header>
+        <div class="ssh-terminal-status-row">
+            <div id="ssh-terminal-status" class="ssh-terminal-status">Connecting</div>
+            <button id="ssh-terminal-retry" class="btn btn-sm btn-outline-light ssh-terminal-retry" type="button" hidden>Retry</button>
+        </div>
+        <form id="ssh-terminal-access-form" class="ssh-terminal-password" hidden>
+            <label for="ssh-terminal-access-username">Dashboard credentials</label>
+            <div class="ssh-terminal-access-controls">
+                <input id="ssh-terminal-access-username" type="text" autocomplete="username" placeholder="Username" required>
+                <input id="ssh-terminal-access-password" type="password" autocomplete="current-password" placeholder="Password" required>
+                <button class="btn btn-sm btn-primary" type="submit">Authorize</button>
+            </div>
+        </form>
+        <form id="ssh-terminal-password-form" class="ssh-terminal-password" hidden>
+            <label for="ssh-terminal-password">SSH password</label>
+            <div class="ssh-terminal-password-controls">
+                <input id="ssh-terminal-password" type="password" autocomplete="current-password" required>
+                <button class="btn btn-sm btn-primary" type="submit">Connect</button>
+            </div>
+        </form>
+        <div id="ssh-terminal-host"></div>
+    </section>
+
     <!-- Bootstrap JS Bundle -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <!-- Dashboard Logic -->
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+    <script>
+    (() => {
+        const storageKey = 'microk3.ssh-terminal.open';
+        const panel = document.getElementById('ssh-terminal-panel');
+        const toggle = document.getElementById('ssh-terminal-toggle');
+        const closeButton = document.getElementById('ssh-terminal-close');
+        const maximizeButton = document.getElementById('ssh-terminal-maximize');
+        const host = document.getElementById('ssh-terminal-host');
+        const status = document.getElementById('ssh-terminal-status');
+        const retryButton = document.getElementById('ssh-terminal-retry');
+        const accessForm = document.getElementById('ssh-terminal-access-form');
+        const accessUsername = document.getElementById('ssh-terminal-access-username');
+        const accessPassword = document.getElementById('ssh-terminal-access-password');
+        const passwordForm = document.getElementById('ssh-terminal-password-form');
+        const passwordInput = document.getElementById('ssh-terminal-password');
+        let terminal;
+        let fitAddon;
+        let socket;
+        let reconnectTimer;
+        let shouldConnect = false;
+        let dashboardAuthorization = '';
+        let connectionAttempt = 0;
+        let terminalError = false;
+
+        function setStatus(value, isError = false) {
+            status.textContent = value;
+            status.classList.toggle('is-error', isError);
+        }
+
+        function showRetry(show) {
+            retryButton.hidden = !show;
+        }
+
+        function socketUrl() {
+            const scheme = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return `${scheme}//${window.location.host}/ws/ssh-terminal`;
+        }
+
+        function requestPassword() {
+            passwordInput.value = '';
+            passwordForm.hidden = false;
+            setStatus('SSH password required');
+            passwordInput.focus();
+        }
+
+        function requestDashboardAuthorization() {
+            accessPassword.value = '';
+            accessForm.hidden = false;
+            setStatus('Dashboard authorization required');
+            accessUsername.focus();
+        }
+
+        function sendResize() {
+            if (!fitAddon || !socket || socket.readyState !== WebSocket.OPEN) return;
+            fitAddon.fit();
+            socket.send(JSON.stringify({ type: 'resize', cols: terminal.cols, rows: terminal.rows }));
+        }
+
+        function connect() {
+            if (!shouldConnect || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
+            const attempt = ++connectionAttempt;
+            terminalError = false;
+            showRetry(false);
+            setStatus('Authenticating');
+            fetch('/api/ssh-terminal/session-id', {
+                credentials: 'same-origin',
+                headers: dashboardAuthorization ? { Authorization: dashboardAuthorization } : {},
+            })
+                .then(async response => {
+                    if (response.status === 401) {
+                        if (attempt !== connectionAttempt) return;
+                        requestDashboardAuthorization();
+                        return;
+                    }
+                    if (!response.ok) {
+                        const payload = await response.json().catch(() => ({}));
+                        throw new Error(payload.error || `Terminal unavailable (${response.status})`);
+                    }
+                    const connection = new WebSocket(socketUrl());
+                    socket = connection;
+                    connection.onopen = () => {
+                        if (socket !== connection) return;
+                        setStatus('Connected');
+                        terminal.focus();
+                        sendResize();
+                    };
+                    connection.onmessage = event => {
+                        if (socket !== connection) return;
+                        const payload = JSON.parse(event.data);
+                        if (payload.type === 'output') terminal.write(payload.data);
+                        if (payload.type === 'password_required') {
+                            requestPassword();
+                        }
+                        if (payload.type === 'error') {
+                            terminalError = true;
+                            setStatus(payload.data, true);
+                        }
+                    };
+                    connection.onclose = () => {
+                        if (socket === connection) {
+                            socket = null;
+                        }
+                        if (shouldConnect && attempt === connectionAttempt) {
+                            if (!terminalError) {
+                                setStatus('Terminal connection closed. Reopen the terminal to retry.', true);
+                            }
+                            showRetry(true);
+                        }
+                    };
+                    connection.onerror = () => {
+                        if (socket === connection) setStatus('Connection error', true);
+                    };
+                })
+                .catch(error => setStatus(error.message, true));
+        }
+
+        function openPanel() {
+            panel.hidden = false;
+            toggle.hidden = true;
+            localStorage.setItem(storageKey, 'true');
+            shouldConnect = true;
+            if (!terminal) {
+                terminal = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', theme: { background: '#111820', foreground: '#dce5ea' }, scrollback: 10000 });
+                fitAddon = new FitAddon.FitAddon();
+                terminal.loadAddon(fitAddon);
+                terminal.open(host);
+                terminal.onData(data => {
+                    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: 'input', data }));
+                });
+                new ResizeObserver(sendResize).observe(panel);
+            }
+            requestAnimationFrame(() => { fitAddon.fit(); connect(); });
+        }
+
+        function toggleMaximize() {
+            const maximized = panel.classList.toggle('is-maximized');
+            maximizeButton.title = maximized ? 'Restore terminal size' : 'Maximize terminal';
+            maximizeButton.setAttribute('aria-label', maximizeButton.title);
+            maximizeButton.innerHTML = `<i class="fas fa-${maximized ? 'compress' : 'expand'}"></i>`;
+            requestAnimationFrame(sendResize);
+        }
+
+        function retryConnection() {
+            connectionAttempt += 1;
+            const previousConnection = socket;
+            socket = null;
+            if (previousConnection && previousConnection.readyState < WebSocket.CLOSING) {
+                previousConnection.close();
+            }
+            accessForm.hidden = true;
+            passwordForm.hidden = true;
+            connect();
+        }
+
+        function closePanel() {
+            panel.hidden = true;
+            toggle.hidden = false;
+            localStorage.setItem(storageKey, 'false');
+            shouldConnect = false;
+            connectionAttempt += 1;
+            window.clearTimeout(reconnectTimer);
+            if (socket) socket.close();
+            socket = null;
+            accessForm.hidden = true;
+            accessPassword.value = '';
+            passwordForm.hidden = true;
+            passwordInput.value = '';
+        }
+
+        toggle.addEventListener('click', openPanel);
+        closeButton.addEventListener('click', closePanel);
+        maximizeButton.addEventListener('click', toggleMaximize);
+        retryButton.addEventListener('click', retryConnection);
+        accessForm.addEventListener('submit', event => {
+            event.preventDefault();
+            dashboardAuthorization = `Basic ${btoa(`${accessUsername.value}:${accessPassword.value}`)}`;
+            accessForm.hidden = true;
+            accessPassword.value = '';
+            connect();
+        });
+        passwordForm.addEventListener('submit', event => {
+            event.preventDefault();
+            const password = passwordInput.value;
+            if (!password || socket?.readyState !== WebSocket.OPEN) return;
+            passwordForm.hidden = true;
+            passwordInput.value = '';
+            socket.send(JSON.stringify({ type: 'password', data: password }));
+            setStatus('Authenticating');
+            terminal.focus();
+        });
+        window.addEventListener('resize', sendResize);
+        if (localStorage.getItem(storageKey) === 'true') openPanel();
+    })();
+    </script>
 </body>
 </html>
