@@ -1,0 +1,411 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.command-console{background:linear-gradient(135deg,#0f1f2e 0%,#14202d 100%);border:1px solid #22384d;border-radius:14px}
+.command-console .cc-header{padding:16px 20px;border-bottom:1px solid #22384d;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+.command-console .cc-body{padding:18px}
+.mono{font-family:"SFMono-Regular",Consolas,monospace}
+.range-cyan{accent-color:#22d3ee}
+.pub-toggle{width:46px;height:26px;background:#1a2e44;border:1px solid #2a4a66;border-radius:999px;position:relative;cursor:pointer;display:inline-block;vertical-align:middle}
+.pub-toggle.on{background:#10b981}
+.pub-toggle::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;background:#fff;border-radius:50%;transition:.2s}
+.pub-toggle.on::after{left:22px}
+.preset-chip{font-family:"SFMono-Regular",Consolas,monospace;font-size:11px;padding:5px 10px;border-radius:999px;border:1px solid #2a4a66;background:#0a1420;color:#8fa3b8;cursor:pointer}
+.preset-chip:hover{border-color:#22d3ee;color:#e6eef6}
+.seg{display:inline-flex;background:#0a1420;border:1px solid #22384d;border-radius:999px;padding:3px;gap:3px}
+.seg button{border:none;background:transparent;color:#8fa3b8;padding:6px 14px;border-radius:999px;font-size:12px;cursor:pointer}
+.seg button.active{background:#22d3ee;color:#001018;font-weight:700}
+.echo-box{background:#0a1420;border:1px solid #22384d;border-radius:10px;padding:12px;font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px;color:#c4d3e6;min-height:56px;white-space:pre-wrap}
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-1"><i class="fas fa-sliders me-2" style="color:#22d3ee"></i>Publisher Studio</h2>
+    <p class="text-muted mb-0 small">Publish any topic directly from the browser — sliders, toggles, and presets. No terminal needed.</p>
+  </div>
+  <span id="ros-badge" class="badge rounded-pill {% if ros_state.ros_connected %}bg-success{% else %}bg-secondary{% endif %}"> {% if ros_state.ros_connected %}ROS 2 Connected{% else %}ROS 2 Disconnected{% endif %} </span>
+</div>
+
+<div id="ros-disconnected-banner" class="alert alert-warning {% if ros_state.ros_connected %}d-none{% endif %} py-2 small">
+  ROS 2 is not connected — publishing is unavailable until the agent is back.
+</div>
+
+<div class="command-console mb-4">
+  <div class="cc-header">
+    <div class="d-flex gap-2 align-items-center flex-wrap" style="flex:1">
+      <select id="topic-picker" class="form-select form-select-sm" style="max-width:360px;background:#0a1420;color:#e6eef6;border-color:#2a4a66">
+        <option value="">Select topic from graph…</option>
+      </select>
+      <input id="topic-custom" class="form-control form-control-sm mono" style="max-width:300px;background:#0a1420;color:#e6eef6;border-color:#2a4a66" placeholder="/custom_topic">
+      <input id="type-input" class="form-control form-control-sm mono" style="max-width:280px;background:#0a1420;color:#c4b5fd;border-color:#3b3a6e" placeholder="std_msgs/msg/String">
+      <button id="btn-refresh-graph" class="btn btn-sm btn-outline-light"><i class="fas fa-sync-alt"></i></button>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <span class="small text-muted mono">Mode</span>
+      <div class="seg" id="mode-seg">
+        <button class="active" data-mode="once">Once</button>
+        <button data-mode="stream">Stream</button>
+      </div>
+      <select id="stream-hz" class="form-select form-select-sm" style="width:90px;background:#0a1420;color:#e6eef6;border-color:#2a4a66">
+        <option value="1">1 Hz</option>
+        <option value="5">5 Hz</option>
+        <option value="10" selected>10 Hz</option>
+        <option value="20">20 Hz</option>
+        <option value="30">30 Hz</option>
+      </select>
+    </div>
+  </div>
+  <div class="cc-body">
+    <div id="type-hint" class="small mono text-muted mb-2">Pick a topic — controls auto-generate. Unknown types fall back to JSON.</div>
+
+    <!-- Dynamic controls -->
+    <div id="controls-host" class="p-2 rounded" style="background:#0c1824;border:1px solid #1e3448;min-height:120px"></div>
+
+    <!-- Publish bar -->
+    <div class="d-flex gap-2 mt-3 flex-wrap">
+      <button id="btn-publish" class="btn flex-grow-1" style="background:linear-gradient(90deg,#22d3ee,#8b5cf6);color:#001018;font-weight:800;letter-spacing:.02em;border:none;padding:11px"><i class="fas fa-paper-plane me-2"></i>PUBLISH</button>
+      <button id="btn-stop-stream" class="btn btn-outline-danger d-none"><i class="fas fa-stop me-1"></i>Stop stream</button>
+      <button id="btn-save-preset" class="btn btn-outline-light">Save preset</button>
+      <button id="btn-clear" class="btn btn-outline-secondary">Clear</button>
+    </div>
+
+    <div class="mt-3">
+      <div class="d-flex justify-content-between align-items-center mb-1">
+        <span class="small mono text-muted">Last publish</span>
+        <span id="last-meta" class="small mono text-muted">—</span>
+      </div>
+      <div id="echo-box" class="echo-box">No publish yet.</div>
+    </div>
+
+    <div class="mt-3 d-flex gap-2 flex-wrap align-items-center">
+      <span class="small mono text-muted">Presets:</span>
+      <span id="presets-host" class="d-flex gap-2 flex-wrap"></span>
+      <button id="btn-export-presets" class="btn btn-sm btn-outline-secondary ms-auto">Export</button>
+      <label class="btn btn-sm btn-outline-secondary mb-0">Import <input id="import-presets" type="file" accept=".json" hidden></label>
+      <button id="btn-clear-presets" class="btn btn-sm btn-outline-danger">Clear presets</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <h6 class="mb-2"><i class="fas fa-lightbulb me-2 text-warning"></i>Quick presets</h6>
+    <div class="d-flex gap-2 flex-wrap">
+      <button class="preset-chip quick-preset" data-topic="/cmd_vel" data-type="geometry_msgs/msg/Twist" data-payload='{"linear":{"x":0.3,"y":0,"z":0},"angular":{"x":0,"y":0,"z":0}}'>/cmd_vel slow forward</button>
+      <button class="preset-chip quick-preset" data-topic="/leds" data-type="std_msgs/msg/Bool" data-payload='{"data":true}'>LED on</button>
+      <button class="preset-chip quick-preset" data-topic="/arm_joint/cmd" data-type="std_msgs/msg/Float32" data-payload='{"data":0.5}'>Arm 0.5 rad</button>
+      <button class="preset-chip quick-preset" data-topic="/chatter" data-type="std_msgs/msg/String" data-payload='{"data":"hello from MicroK3"}'>Chatter hello</button>
+    </div>
+    <div class="small text-muted mt-2">Tip: use the search on the ROS page to discover topic names, then paste them here. The type field is editable — any <code>package/msg/Type</code> that rclpy knows will work.</div>
+  </div>
+</div>
+
+<script>
+const rosConnectedInitial = {{ 'true' if ros_state.ros_connected else 'false' }};
+
+const TEMPLATES = {
+  "std_msgs/msg/String": { fields: [{k:"data", t:"string", ph:"hello"}]},
+  "std_msgs/msg/Bool": { fields: [{k:"data", t:"bool"}]},
+  "std_msgs/msg/Int32": { fields: [{k:"data", t:"int", min:-1000, max:1000}]},
+  "std_msgs/msg/Int64": { fields: [{k:"data", t:"int", min:-1e6, max:1e6}]},
+  "std_msgs/msg/Float32": { fields: [{k:"data", t:"float", min:-10, max:10, step:0.01}]},
+  "std_msgs/msg/Float64": { fields: [{k:"data", t:"float", min:-100, max:100, step:0.01}]},
+  "geometry_msgs/msg/Twist": { fields: [
+    {k:"linear.x", t:"float", min:-2, max:2, step:0.05},
+    {k:"linear.y", t:"float", min:-2, max:2, step:0.05},
+    {k:"linear.z", t:"float", min:-2, max:2, step:0.05},
+    {k:"angular.x", t:"float", min:-3, max:3, step:0.05},
+    {k:"angular.y", t:"float", min:-3, max:3, step:0.05},
+    {k:"angular.z", t:"float", min:-3, max:3, step:0.05},
+  ]},
+  "geometry_msgs/msg/Vector3": { fields: [
+    {k:"x", t:"float", min:-5, max:5, step:0.05},
+    {k:"y", t:"float", min:-5, max:5, step:0.05},
+    {k:"z", t:"float", min:-5, max:5, step:0.05},
+  ]},
+};
+
+function esc(s){ return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');}
+
+function getNested(obj, path){
+  const parts = path.split('.');
+  let cur = obj;
+  for(const p of parts){ if(cur==null) return undefined; cur = cur[p]; }
+  return cur;
+}
+function setNested(obj, path, val){
+  const parts = path.split('.');
+  let cur = obj;
+  for(let i=0;i<parts.length-1;i++){ const p=parts[i]; if(!(p in cur) || typeof cur[p] !== 'object') cur[p]={}; cur=cur[p]; }
+  cur[parts[parts.length-1]] = val;
+}
+
+let currentType = "";
+let streamTimer = null;
+let publishCount = 0;
+
+function renderControls(type){
+  currentType = type;
+  const host = document.getElementById('controls-host');
+  const tmpl = TEMPLATES[type];
+  if(tmpl){
+    host.innerHTML = tmpl.fields.map(f => controlRowHTML(f)).join('');
+    bindControlEvents();
+    document.getElementById('type-hint').textContent = `Template for ${type} — ${tmpl.fields.length} fields. Payload is assembled as nested JSON.`;
+  } else {
+    // Generic JSON fallback
+    const example = type ? `// No template for ${type} — edit raw JSON payload\n{\n  "data": "hello"\n}` : `{\n  "data": "hello"\n}`;
+    host.innerHTML = `
+      <div class="small mono text-muted mb-2">Raw JSON payload (sent as <code>payload</code>). For structured types use nested objects, e.g. <code>{"linear":{"x":0.3}}</code>.</div>
+      <textarea id="raw-json" class="form-control mono" rows="7" style="background:#0a1420;color:#e6eef6;border-color:#22384d;font-size:13px">${esc(example)}</textarea>
+      <div id="raw-json-error" class="small text-danger mt-1 d-none"></div>
+    `;
+    document.getElementById('type-hint').textContent = type ? `Unknown template for ${type} — using raw JSON. Make sure the JSON matches the ROS message fields.` : `Enter a topic type above to get controls, or use raw JSON.`;
+  }
+}
+
+function controlRowHTML(f){
+  const val = (f.t==='bool') ? false : (f.t==='string' ? (f.ph||'') : 0);
+  if(f.t==='bool'){
+    return `<div class="d-flex align-items-center justify-content-between py-2" style="border-bottom:1px solid rgba(255,255,255,.06)"><span class="mono small" style="color:#8fa3b8">${esc(f.k)} <span style="color:#6b8398">bool</span></span><span class="d-flex align-items-center gap-2"><span class="pub-toggle" data-key="${esc(f.k)}" data-type="bool"></span><span class="small mono toggle-label" style="min-width:42px;color:#8fa3b8">false</span></span></div>`;
+  }
+  if(f.t==='string'){
+    return `<div class="d-flex align-items-center gap-3 py-2" style="border-bottom:1px solid rgba(255,255,255,.06)"><span class="mono small" style="color:#8fa3b8;min-width:120px">${esc(f.k)} <span style="color:#6b8398">string</span></span><input class="form-control form-control-sm mono flex-grow-1" data-key="${esc(f.k)}" data-type="string" value="${esc(val)}" style="background:#0a1420;color:#e6eef6;border-color:#2a4a66"></div>`;
+  }
+  const min = f.min ?? -10, max = f.max ?? 10, step = f.step ?? 0.1;
+  return `<div class="d-flex align-items-center gap-3 py-2" style="border-bottom:1px solid rgba(255,255,255,.06)">
+    <span class="mono small" style="color:#8fa3b8;min-width:120px">${esc(f.k)} <span style="color:#6b8398">${esc(f.t)}</span></span>
+    <input type="range" class="form-range flex-grow-1 range-cyan" data-key="${esc(f.k)}" data-type="${esc(f.t)}" min="${min}" max="${max}" step="${step}" value="${val}" style="accent-color:#22d3ee">
+    <input type="number" class="form-control form-control-sm mono" data-key="${esc(f.k)}-num" value="${val}" step="${step}" style="width:110px;background:#0a1420;color:#e6eef6;border-color:#2a4a66">
+    <span class="small mono" style="color:#6b8398;min-width:52px">${min}…${max}</span>
+  </div>`;
+}
+
+function bindControlEvents(){
+  document.querySelectorAll('#controls-host [data-key]').forEach(el=>{
+    if(el.classList.contains('pub-toggle')){
+      el.addEventListener('click', ()=>{
+        el.classList.toggle('on');
+        const on = el.classList.contains('on');
+        el.nextElementSibling.textContent = on ? 'true' : 'false';
+      });
+    } else if(el.type==='range'){
+      const num = document.querySelector(`[data-key="${el.dataset.key}-num"]`);
+      el.addEventListener('input', ()=>{ if(num) num.value = el.value; });
+      if(num) num.addEventListener('input', ()=>{ el.value = num.value; });
+    }
+  });
+}
+
+function collectPayload(){
+  const type = (document.getElementById('type-input').value||'').trim();
+  const tmpl = TEMPLATES[type];
+  if(tmpl){
+    const payload = {};
+    tmpl.fields.forEach(f=>{
+      if(f.t==='bool'){
+        const tog = document.querySelector(`.pub-toggle[data-key="${f.k}"]`);
+        const v = tog ? tog.classList.contains('on') : false;
+        setNested(payload, f.k, v);
+      } else if(f.t==='string'){
+        const inp = document.querySelector(`[data-key="${f.k}"]`);
+        setNested(payload, f.k, inp ? inp.value : "");
+      } else {
+        const inp = document.querySelector(`input[type="range"][data-key="${f.k}"]`);
+        const raw = inp ? inp.value : "0";
+        const v = (f.t==='int') ? parseInt(raw,10) : parseFloat(raw);
+        setNested(payload, f.k, v);
+      }
+    });
+    return {payload, ok:true};
+  } else {
+    const ta = document.getElementById('raw-json');
+    if(!ta) return {payload:{}, ok:true};
+    const errEl = document.getElementById('raw-json-error');
+    try{
+      const obj = JSON.parse(ta.value);
+      if(errEl){ errEl.classList.add('d-none'); }
+      return {payload: obj, ok:true};
+    }catch(e){
+      if(errEl){ errEl.textContent = 'Invalid JSON: '+e.message; errEl.classList.remove('d-none'); }
+      return {payload:null, ok:false};
+    }
+  }
+}
+
+async function fetchGraph(){
+  try{
+    const r = await fetch('/api/ros/graph'); const j = await r.json();
+    const sel = document.getElementById('topic-picker');
+    const prev = sel.value;
+    const topics = j.topics || [];
+    sel.innerHTML = '<option value="">Select topic from graph…</option>' + topics.map(t=>`<option value="${esc(t.name)}" data-types="${esc((t.types||[]).join(','))}">${esc(t.name)} — ${(t.types||[]).join(', ')}</option>`).join('');
+    if(prev) sel.value = prev;
+    // badge
+    const badge = document.getElementById('ros-badge');
+    if(badge){ badge.textContent = j.ros_connected ? 'ROS 2 Connected' : 'ROS 2 Disconnected'; badge.className = 'badge rounded-pill '+(j.ros_connected?'bg-success':'bg-secondary'); }
+    document.getElementById('ros-disconnected-banner').classList.toggle('d-none', !!j.ros_connected);
+  }catch(e){ console.error(e); }
+}
+
+async function doPublish(){
+  const topicCustom = document.getElementById('topic-custom').value.trim();
+  const topicPick = document.getElementById('topic-picker').value.trim();
+  const topic_name = topicCustom || topicPick;
+  const topic_type = document.getElementById('type-input').value.trim();
+  if(!topic_name) return alert('Enter a topic name');
+  if(!topic_type) return alert('Enter a topic type (e.g. std_msgs/msg/String)');
+  const {payload, ok} = collectPayload();
+  if(!ok) return;
+  const r = await fetch('/api/ros/publish', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({topic_name, topic_type, payload})});
+  const j = await r.json().catch(()=>({}));
+  publishCount++;
+  const echo = document.getElementById('echo-box');
+  const meta = document.getElementById('last-meta');
+  if(r.ok && j.success){
+    echo.textContent = `✓ ${topic_name}  ${topic_type}\n` + JSON.stringify(payload,null,2);
+    echo.style.borderColor = '#10b981';
+    meta.textContent = `#${publishCount} ok — ${new Date().toLocaleTimeString()}`;
+  }else{
+    echo.textContent = `✗ ${j.error || 'publish failed'}\n` + JSON.stringify(payload,null,2);
+    echo.style.borderColor = '#f43f5e';
+    meta.textContent = `#${publishCount} error — ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+function startStream(){
+  const hz = parseInt(document.getElementById('stream-hz').value,10)||10;
+  const interval = Math.round(1000/hz);
+  if(streamTimer) clearInterval(streamTimer);
+  streamTimer = setInterval(()=>{ doPublish().catch(console.error); }, interval);
+  document.getElementById('btn-stop-stream').classList.remove('d-none');
+  document.getElementById('btn-publish').innerHTML = '<i class="fas fa-broadcast-tower me-2"></i>STREAMING @ '+hz+' Hz';
+}
+
+function stopStream(){
+  if(streamTimer){ clearInterval(streamTimer); streamTimer=null; }
+  document.getElementById('btn-stop-stream').classList.add('d-none');
+  document.getElementById('btn-publish').innerHTML = '<i class="fas fa-paper-plane me-2"></i>PUBLISH';
+}
+
+// Presets via localStorage
+const LS_KEY = 'microk3.publisher_presets';
+function loadPresets(){
+  try{ return JSON.parse(localStorage.getItem(LS_KEY)||'[]'); }catch{ return []; }
+}
+function savePresets(arr){ localStorage.setItem(LS_KEY, JSON.stringify(arr)); renderPresets(); }
+function renderPresets(){
+  const host = document.getElementById('presets-host');
+  const arr = loadPresets();
+  if(!arr.length){ host.innerHTML = '<span class="small text-muted">No presets yet — publish once then "Save preset".</span>'; return; }
+  host.innerHTML = arr.map(p=>`<span class="preset-chip" data-id="${esc(p.id)}">${esc(p.label)} <span style="color:#6b8398">· ${esc(p.topic_name)}</span></span>`).join('');
+  host.querySelectorAll('.preset-chip').forEach(ch=>{
+    ch.addEventListener('click', ()=>{
+      const p = arr.find(x=>x.id===ch.dataset.id);
+      if(!p) return;
+      document.getElementById('topic-custom').value = p.topic_name || '';
+      document.getElementById('topic-picker').value = '';
+      document.getElementById('type-input').value = p.topic_type || '';
+      renderControls(p.topic_type||'');
+      // refill values after render
+      setTimeout(()=>{
+        if(p.payload && TEMPLATES[p.topic_type]){
+          Object.entries(flatten(p.payload)).forEach(([k,v])=>{
+            const tog = document.querySelector(`.pub-toggle[data-key="${k}"]`);
+            if(tog){ if(!!v) tog.classList.add('on'); tog.nextElementSibling.textContent = v?'true':'false'; return; }
+            const rng = document.querySelector(`input[type="range"][data-key="${k}"]`);
+            const num = document.querySelector(`[data-key="${k}-num"]`);
+            if(rng){ rng.value = v; if(num) num.value=v; }
+            const str = document.querySelector(`[data-key="${k}"]`);
+            if(str && str.type!=='range') str.value = v;
+          });
+        } else if(p.payload){
+          const ta=document.getElementById('raw-json'); if(ta) ta.value = JSON.stringify(p.payload,null,2);
+        }
+      }, 30);
+    });
+  });
+}
+function flatten(obj, prefix="", out={}){
+  for(const [k,v] of Object.entries(obj||{})){
+    const path = prefix? prefix+'.'+k : k;
+    if(v && typeof v==='object' && !Array.isArray(v)) flatten(v, path, out);
+    else out[path]=v;
+  }
+  return out;
+}
+
+document.addEventListener('DOMContentLoaded', ()=>{
+  fetchGraph();
+  renderControls('');
+  renderPresets();
+  document.getElementById('btn-refresh-graph').addEventListener('click', fetchGraph);
+  document.getElementById('topic-picker').addEventListener('change', (e)=>{
+    const opt = e.target.selectedOptions[0];
+    if(!opt || !opt.value) return;
+    document.getElementById('topic-custom').value = opt.value;
+    const types = (opt.dataset.types||'').split(',').filter(Boolean);
+    if(types[0]) { document.getElementById('type-input').value = types[0]; renderControls(types[0]); }
+  });
+  document.getElementById('type-input').addEventListener('change', (e)=> renderControls(e.target.value.trim()));
+  document.getElementById('type-input').addEventListener('input', (e)=>{
+    clearTimeout(window._typeDeb); window._typeDeb=setTimeout(()=>renderControls(e.target.value.trim()), 400);
+  });
+  document.querySelectorAll('#mode-seg button').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.querySelectorAll('#mode-seg button').forEach(x=>x.classList.remove('active'));
+      b.classList.add('active');
+    });
+  });
+  document.getElementById('btn-publish').addEventListener('click', ()=>{
+    const mode = document.querySelector('#mode-seg button.active')?.dataset.mode || 'once';
+    if(mode==='stream'){ if(streamTimer) stopStream(); else startStream(); }
+    else doPublish();
+  });
+  document.getElementById('btn-stop-stream').addEventListener('click', stopStream);
+  document.getElementById('btn-clear').addEventListener('click', ()=>{ renderControls(document.getElementById('type-input').value.trim()); });
+  document.getElementById('btn-save-preset').addEventListener('click', ()=>{
+    const topic_name = (document.getElementById('topic-custom').value.trim() || document.getElementById('topic-picker').value.trim());
+    const topic_type = document.getElementById('type-input').value.trim();
+    if(!topic_name || !topic_type) return alert('Pick topic and type first');
+    const {payload, ok}=collectPayload(); if(!ok) return;
+    const label = prompt('Preset name:', topic_name.split('/').pop() || topic_name);
+    if(!label) return;
+    const arr = loadPresets();
+    arr.push({id: Date.now().toString(36), label, topic_name, topic_type, payload});
+    savePresets(arr);
+  });
+  document.querySelectorAll('.quick-preset').forEach(b=>{
+    b.addEventListener('click', ()=>{
+      document.getElementById('topic-custom').value = b.dataset.topic;
+      document.getElementById('topic-picker').value='';
+      document.getElementById('type-input').value=b.dataset.type;
+      renderControls(b.dataset.type);
+      setTimeout(()=>{
+        try{
+          const pl=JSON.parse(b.dataset.payload);
+          if(TEMPLATES[b.dataset.type]){
+            Object.entries(flatten(pl)).forEach(([k,v])=>{
+              const tog=document.querySelector(`.pub-toggle[data-key="${k}"]`);
+              if(tog){ if(!!v) tog.classList.add('on'); tog.nextElementSibling.textContent=v?'true':'false'; return; }
+              const rng=document.querySelector(`input[type="range"][data-key="${k}"]`);
+              const num=document.querySelector(`[data-key="${k}-num"]`);
+              if(rng){ rng.value=v; if(num) num.value=v; }
+            });
+          } else { const ta=document.getElementById('raw-json'); if(ta) ta.value=JSON.stringify(pl,null,2); }
+        }catch{}
+      },30);
+    });
+  });
+  document.getElementById('btn-export-presets').addEventListener('click', ()=>{
+    const blob=new Blob([JSON.stringify(loadPresets(),null,2)],{type:'application/json'});
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='microk3-presets.json'; a.click();
+  });
+  document.getElementById('import-presets').addEventListener('change', (e)=>{
+    const f=e.target.files[0]; if(!f) return;
+    const r=new FileReader(); r.onload=()=>{ try{ const arr=JSON.parse(r.result); if(Array.isArray(arr)) savePresets(arr); }catch(err){ alert('Invalid JSON: '+err.message); } }; r.readAsText(f);
+  });
+  document.getElementById('btn-clear-presets').addEventListener('click', ()=>{ if(confirm('Clear all presets?')) savePresets([]); });
+});
+</script>
+{% endblock %}

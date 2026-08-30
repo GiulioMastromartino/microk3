@@ -327,3 +327,8 @@ body {
 .ros-node-entry:last-child {
     border-bottom: none;
 }
+
+/* Publisher Studio & Teleop Drive — console dialect */
+.console-card{ background: linear-gradient(135deg,#0f1f2e 0%,#14202d 100%); border:1px solid #22384d; border-radius:14px; }
+.mono{ font-family:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace }
+

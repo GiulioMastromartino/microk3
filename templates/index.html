@@ -174,6 +174,84 @@
     {% endif %}
 </div>
 
+<!-- Jetson Host Diagnostics (card) -->
+<div class="row mt-4">
+    <div class="col-md-12">
+        <div class="d-flex justify-content-between align-items-center">
+            <h4><i class="fas fa-microchip me-2"></i>Jetson Host <small class="text-muted" style="font-size:0.6em">{{ jetson_diag.board or '—' }}</small></h4>
+            <a href="/jetson-diagnostics" class="btn btn-sm btn-outline-primary">Details <i class="fas fa-arrow-right ms-1"></i></a>
+        </div>
+    </div>
+</div>
+<div class="row mt-2">
+    {% if not jetson_diag or not jetson_diag.available %}
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-body text-muted text-center py-4">
+                <i class="fas fa-microchip fa-2x mb-2"></i>
+                <div>{% if jetson_diag and jetson_diag.reason %}{{ jetson_diag.reason }}{% else %}Jetson diagnostics unavailable (not running on Jetson hardware){% endif %}</div>
+                <div class="small">Source: {{ jetson_diag.source or '—' }} · Last: {{ jetson_diag.timestamp or '—' }}</div>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-temperature-half me-1"></i> Temperatures</h6>
+                <div class="small">
+                    {% set t = jetson_diag.temperatures or {} %}
+                    {% for k in ['cpu-thermal','gpu-thermal','cv0-thermal','cv1-thermal','cv2-thermal','soc0-thermal','soc1-thermal','soc2-thermal','tj-thermal'] if k in t %}
+                    <div class="d-flex justify-content-between"><span>{{ k }}</span><strong class="{% if t[k] > 80 %}text-danger{% elif t[k] > 60 %}text-warning{% endif %}">{{ "%.1f"|format(t[k]) }}°C</strong></div>
+                    {% endfor %}
+                    {% for k,v in t.items() if k not in ['cpu-thermal','gpu-thermal','cv0-thermal','cv1-thermal','cv2-thermal','soc0-thermal','soc1-thermal','soc2-thermal','tj-thermal'] %}
+                    <div class="d-flex justify-content-between"><span>{{ k }}</span><strong>{{ "%.1f"|format(v) }}°C</strong></div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-bolt me-1"></i> Power &amp; Memory</h6>
+                <div class="d-flex justify-content-between"><span>Total</span><strong>{% if jetson_diag.power.total_w is not none %}{{ "%.1f"|format(jetson_diag.power.total_w) }} W{% else %}—{% endif %}</strong></div>
+                {% if jetson_diag.power.rails %}
+                <div class="mt-2 small">
+                    {% for k,v in jetson_diag.power.rails.items() if k != 'total' %}<div class="d-flex justify-content-between"><span>{{ k }}</span><span>{{ "%.2f"|format(v) }} W</span></div>{% endfor %}
+                </div>
+                {% endif %}
+                <hr class="my-2">
+                <div class="d-flex justify-content-between small"><span>RAM</span><span><strong>{{ jetson_diag.memory.used_mb }} / {{ jetson_diag.memory.total_mb }} MB</strong> ({{ jetson_diag.memory.percent }}%)</span></div>
+                <div class="progress mt-1" style="height:6px"><div class="progress-bar bg-success" style="width: {{ jetson_diag.memory.percent }}%"></div></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-gauge me-1"></i> CPU</h6>
+                <div class="d-flex justify-content-between"><span>Aggregate</span><strong>{{ "%.1f"|format(jetson_diag.cpu.aggregate_percent or 0) }}%</strong></div>
+                <div class="small mt-1">
+                    {% for c in jetson_diag.cpu.cores %}<div class="d-flex justify-content-between"><span>CPU{{ c.core }}</span><span>{{ "%.1f"|format(c.percent) if c.percent is not none else "—" }}% · {{ "%.0f"|format(c.freq_mhz) if c.freq_mhz is not none else "—" }} MHz</span></div>{% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <h6 class="card-title"><i class="fas fa-gamepad me-1"></i> GPU</h6>
+                <div class="d-flex justify-content-between"><span>Utilization</span><strong>{% if jetson_diag.gpu.percent is not none %}{{ "%.1f"|format(jetson_diag.gpu.percent) }}%{% else %}—{% endif %}</strong></div>
+                <div class="d-flex justify-content-between"><span>Frequency</span><span>{% if jetson_diag.gpu.freq_mhz is not none %}{{ "%.0f"|format(jetson_diag.gpu.freq_mhz) }} MHz{% else %}—{% endif %}</span></div>
+                <div class="small text-muted mt-2">Source: {{ jetson_diag.source }} · {{ jetson_diag.timestamp }}</div>
+                <div class="small text-muted">ROS: <code>microk3/jetson_diagnostics</code></div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
 <!-- System Configuration -->
 <div class="row mt-4">
     <div class="col-md-12">

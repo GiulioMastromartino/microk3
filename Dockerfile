@@ -30,6 +30,14 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# jetson-stats: Jetson now has internet, install directly from PyPI.
+# Falls back gracefully if offline (sysfs still works).
+RUN pip install --no-cache-dir jetson-stats || \
+    (echo "jetson-stats pip install failed, trying vendored wheels..." && \
+     if [ -d /app/wheels ] && ls /app/wheels/*.whl >/dev/null 2>&1; then \
+       pip install --no-cache-dir --no-index --find-links=/app/wheels jetson-stats; \
+     else echo "jetson-stats not available; using sysfs fallback"; fi)
+
 # Create necessary directories
 RUN mkdir -p logs data
 

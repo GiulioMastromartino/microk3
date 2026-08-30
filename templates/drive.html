@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+.drive-console{background:linear-gradient(135deg,#0f1f2e 0%,#0c1824 100%);border:1px solid #22384d;border-radius:14px}
+.joy{width:200px;height:200px;border-radius:50%;background:radial-gradient(circle at 30% 30%, #1a2e44, #0a1420);border:2px solid #2a4a66;position:relative;margin:auto;touch-action:none;user-select:none}
+.joy .stick{position:absolute;left:50%;top:50%;width:56px;height:56px;margin:-28px;border-radius:50%;background:linear-gradient(180deg,#22d3ee,#0ea5e9);box-shadow:0 8px 18px rgba(34,211,238,.4);display:grid;place-items:center;color:#001018;font-weight:800;transition:transform .04s}
+.joy .cross{position:absolute;left:50%;top:50%;width:1px;height:100%;background:rgba(255,255,255,.08);transform:translateX(-50%)}
+.joy .cross2{position:absolute;left:0;top:50%;width:100%;height:1px;background:rgba(255,255,255,.08);transform:translateY(-50%)}
+.dpad{display:grid;grid-template-columns:64px 64px 64px;grid-template-rows:64px 64px 64px;gap:6px;width:204px;margin:auto}
+.dpad button{background:#14202d;border:1px solid #22384d;border-radius:12px;color:#e6eef6;font-size:20px;display:grid;place-items:center}
+.dpad button:active,.dpad button.pressed{background:#22d3ee;color:#001018;border-color:#22d3ee}
+.mono{font-family:"SFMono-Regular",Consolas,monospace}
+.range-cyan{accent-color:#22d3ee}
+.estop{background:linear-gradient(180deg,#f43f5e,#be123c);color:#fff;border:none;border-radius:12px;padding:14px 18px;font-weight:900;letter-spacing:.04em;box-shadow:0 6px 14px rgba(244,63,94,.35)}
+.estop:active{transform:scale(.98)}
+.vel-bar{height:8px;background:#0a1420;border-radius:999px;overflow:hidden;border:1px solid #1e3448}
+.vel-fill{height:100%;background:linear-gradient(90deg,#22d3ee,#8b5cf6);transition:width .12s}
+.badge-turbo{background:linear-gradient(90deg,#f59e0b,#f97316);color:#001018}
+.drive-tabs .nav-link{color:#8fa3b8;border:1px solid transparent;background:transparent;font-weight:600}
+.drive-tabs .nav-link.active{color:#e6eef6;background:#14202d;border-color:#22384d #22384d #14202d}
+.drive-tabs .nav-link i{margin-right:6px}
+.arm-slider-row{display:grid;grid-template-columns:160px 1fr 90px;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.arm-slider-row:last-child{border:none}
+.joint-value{font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px;color:#22d3ee;text-align:right;min-width:80px}
+</style>
+
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h2 class="mb-1"><i class="fas fa-gamepad me-2" style="color:#8b5cf6"></i>Teleop Drive</h2>
+    <p class="text-muted mb-0 small">Browser teleop — identical to the ROS teleops under the hood. Rover uses <code>/cmd_vel</code> (Twist → relay → <code>/diff_drive_controller/cmd_vel</code> TwistStamped). Arm uses <code>/arm_controller/joint_trajectory</code> + <code>/gripper_controller/joint_trajectory</code>.</p>
+  </div>
+  <div class="d-flex align-items-center gap-2">
+    <span id="ros-badge" class="badge rounded-pill {% if ros_state.ros_connected %}bg-success{% else %}bg-secondary{% endif %}">{% if ros_state.ros_connected %}ROS 2 Connected{% else %}ROS 2 Disconnected{% endif %}</span>
+    <span id="armed-badge" class="badge rounded-pill bg-secondary">IDLE</span>
+  </div>
+</div>
+
+<div id="ros-disconnected-banner" class="alert alert-warning {% if ros_state.ros_connected %}d-none{% endif %} py-2 small">
+  ROS 2 is not connected — teleop is disabled.
+</div>
+
+<ul class="nav nav-tabs drive-tabs mb-3" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="tab-rover-btn" data-bs-toggle="tab" data-bs-target="#tab-rover" type="button" role="tab"><i class="fas fa-truck-monster"></i>Rover</button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-arm-btn" data-bs-toggle="tab" data-bs-target="#tab-arm" type="button" role="tab"><i class="fas fa-robot"></i>Arm</button>
+  </li>
+</ul>
+
+<div class="tab-content">
+<!-- ===================== ROVER TAB ===================== -->
+<div class="tab-pane fade show active" id="tab-rover" role="tabpanel">
+<div class="row g-3">
+  <div class="col-lg-5">
+    <div class="drive-console p-3 h-100">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="mono small" style="color:#8fa3b8;letter-spacing:.06em;text-transform:uppercase">Virtual joystick — drag to drive</span>
+        <span id="rate-label" class="badge bg-dark mono">20 Hz</span>
+      </div>
+      <div id="joy" class="joy">
+        <div class="cross"></div><div class="cross2"></div>
+        <div id="stick" class="stick"><i class="fas fa-arrows-alt"></i></div>
+      </div>
+      <div class="d-flex gap-2 mt-3">
+        <div class="flex-grow-1 p-2 rounded mono small" style="background:#0a1420;border:1px solid #1e3448;color:#8fa3b8">linear.x <span id="val-lin" style="color:#22d3ee;font-weight:700">0.00</span> m/s</div>
+        <div class="flex-grow-1 p-2 rounded mono small" style="background:#0a1420;border:1px solid #1e3448;color:#8fa3b8">angular.z <span id="val-ang" style="color:#8b5cf6;font-weight:700">0.00</span> rad/s</div>
+      </div>
+      <div class="vel-bar mt-2"><div id="vel-fill" class="vel-fill" style="width:0%"></div></div>
+      <div class="d-flex gap-2 mt-3">
+        <button id="btn-turbo" class="btn flex-grow-1" style="background:#1a2e44;color:#e6eef6;border:1px solid #2a4a66"><i class="fas fa-bolt me-1" style="color:#f59e0b"></i> Turbo (hold Shift)</button>
+        <button id="btn-estop" class="estop"><i class="fas fa-hand-paper me-1"></i> E-STOP</button>
+      </div>
+      <div class="small mono mt-2" style="color:#6b8398">Hold joystick / keys to keep driving. Release = auto stop. Watchdog publishes zero if stream stalls. Relay: <code>nav2_cmd_vel_relay</code> bridges <code>/cmd_vel</code> → <code>/diff_drive_controller/cmd_vel</code> (TwistStamped, use_stamped_vel=true).</div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="mono small mb-2" style="color:#8fa3b8;letter-spacing:.06em;text-transform:uppercase">D-pad & keyboard</div>
+        <div class="dpad">
+          <button data-dir="none" disabled style="opacity:.2"></button>
+          <button data-dir="forward"><i class="fas fa-chevron-up"></i></button>
+          <button data-dir="none" disabled style="opacity:.2"></button>
+          <button data-dir="left"><i class="fas fa-chevron-left"></i></button>
+          <button id="deadman" style="background:#0a1420;color:#8fa3b8;font-size:11px;line-height:1">DEAD<br>MAN</button>
+          <button data-dir="right"><i class="fas fa-chevron-right"></i></button>
+          <button data-dir="none" disabled style="opacity:.2"></button>
+          <button data-dir="back"><i class="fas fa-chevron-down"></i></button>
+          <button data-dir="none" disabled style="opacity:.2"></button>
+        </div>
+        <div class="d-flex gap-2 mt-2 flex-wrap">
+          <span class="badge bg-light text-dark mono">WASD</span>
+          <span class="badge bg-light text-dark mono">Arrows</span>
+          <span class="badge bg-light text-dark mono">Space = stop</span>
+          <span id="gamepad-badge" class="badge bg-secondary mono">Gamepad: none</span>
+        </div>
+        <div class="alert alert-info py-2 mt-3 mb-0 small">
+          <strong>Keys:</strong> W / ↑ forward, S / ↓ back, A / ← left, D / → right. Hold <code>Shift</code> for turbo ×1.8. <code>Esc</code> = E-STOP.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-3">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="mono small mb-2" style="color:#8fa3b8;letter-spacing:.06em;text-transform:uppercase">Tune — Rover</div>
+        <label class="small d-flex justify-content-between"><span>Max linear</span><span id="max-lin-label" class="mono">0.6 m/s</span></label>
+        <input id="max-lin" type="range" class="form-range range-cyan" min="0.2" max="2.0" step="0.1" value="0.6">
+        <label class="small d-flex justify-content-between mt-2"><span>Max angular</span><span id="max-ang-label" class="mono">1.5 rad/s</span></label>
+        <input id="max-ang" type="range" class="form-range range-cyan" min="0.5" max="3.0" step="0.1" value="1.5">
+        <hr>
+        <div class="mono small" style="color:#6b8398">
+          <div>Topic <span id="topic-label" style="color:#22d3ee">/cmd_vel</span></div>
+          <div>Type <span style="color:#8b5cf6">geometry_msgs/Twist</span></div>
+          <div>Relay → <span style="color:#22d3ee">/diff_drive_controller/cmd_vel</span> <span style="color:#6b8398">TwistStamped</span></div>
+          <div>Rate <span id="rate-label2">20 Hz</span> <span style="color:#6b8398">· zero on release</span></div>
+        </div>
+        <div class="mt-2">
+          <label class="small">Topic override</label>
+          <input id="topic-input" class="form-control form-control-sm mono" value="/cmd_vel" style="background:#0a1420;color:#e6eef6;border-color:#22384d">
+        </div>
+        <div class="mt-2 small mono p-2 rounded" style="background:#0a1420;border:1px solid #1e3448;color:#8fa3b8">
+          Status: <span id="teleop-status" style="color:#10b981">idle</span><br>
+          Last publish: <span id="teleop-last">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ===================== ARM TAB ===================== -->
+<div class="tab-pane fade" id="tab-arm" role="tabpanel">
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="drive-console p-3">
+      <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-2">
+        <span class="mono small" style="color:#8fa3b8;letter-spacing:.06em;text-transform:uppercase"><i class="fas fa-sliders me-1"></i> Joint sliders → <code>/arm_controller/joint_trajectory</code> + <code>/gripper_controller/joint_trajectory</code></span>
+        <span class="badge bg-dark mono" id="arm-rate-label">50 Hz gamepad · on-demand sliders</span>
+      </div>
+
+      <div id="arm-sliders">
+        <!-- rows injected by JS -->
+      </div>
+
+      <div class="d-flex gap-2 mt-3 flex-wrap">
+        <button id="btn-arm-home" class="btn btn-outline-light"><i class="fas fa-home me-1"></i> Home (0)</button>
+        <button id="btn-grip-open" class="btn btn-outline-info"><i class="fas fa-hand-paper me-1"></i> Open gripper</button>
+        <button id="btn-grip-close" class="btn btn-outline-warning"><i class="fas fa-hand-rock me-1"></i> Close gripper</button>
+        <button id="btn-arm-estop" class="estop ms-auto"><i class="fas fa-hand-paper me-1"></i> ARM E-STOP</button>
+      </div>
+
+      <div class="row g-2 mt-3">
+        <div class="col-6 col-md-3">
+          <label class="small">Step (deg)</label>
+          <input id="arm-step" type="range" class="form-range range-cyan" min="1" max="15" step="1" value="3">
+          <div class="mono small" style="color:#22d3ee"><span id="arm-step-label">3°</span> / <span id="arm-step-mm">5.0 mm</span></div>
+        </div>
+        <div class="col-6 col-md-3">
+          <label class="small">Duration (s)</label>
+          <input id="arm-duration" type="range" class="form-range range-cyan" min="0.1" max="1.0" step="0.1" value="0.3">
+          <div class="mono small" style="color:#8b5cf6" id="arm-duration-label">0.3 s</div>
+        </div>
+        <div class="col-12 col-md-6 d-flex align-items-end">
+          <div class="small mono p-2 rounded flex-grow-1" style="background:#0a1420;border:1px solid #1e3448;color:#8fa3b8">
+            Status: <span id="arm-status" style="color:#10b981">idle</span> · Last: <span id="arm-last">—</span><br>
+            <span style="color:#6b8398">Keys match <code>arm_keyboard_teleop.py</code> when Arm tab is active: q/a j1, w/s j2, e/d j3, r/f pitch, t/g roll, y/h gripper, o/c open/close, 0 home</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <div class="mono small mb-2" style="color:#8fa3b8;letter-spacing:.06em;text-transform:uppercase">Live feedback — <code>/joint_states</code></div>
+        <div id="joint-live" class="mono small" style="background:#0a1420;border:1px solid #1e3448;border-radius:8px;padding:10px;color:#8fa3b8;min-height:120px">Waiting for joint_states…</div>
+        <div class="d-flex gap-2 mt-2 flex-wrap">
+          <span id="arm-gamepad-badge" class="badge bg-secondary mono">Gamepad: none</span>
+          <span class="badge bg-dark mono">L2/R2 deadman</span>
+          <span class="badge bg-danger mono">△ E-STOP</span>
+        </div>
+
+        <div class="mono small mt-3" style="color:#6b8398">Joints: <span style="color:#22d3ee">j1</span> continuous yaw · <span style="color:#22d3ee">j2/j3</span> ±90° · <span style="color:#22d3ee">pitch</span> 0–180° · <span style="color:#22d3ee">roll</span> continuous · <span style="color:#f59e0b">slider</span> 0–50 mm (0=open, 50=closed). Limits per <code>joint_limits.yaml</code>.</div>
+
+        <div class="alert alert-info py-2 mt-3 mb-0 small">
+          <strong>Gamepad</strong> (when Arm tab active): left stick X→j1, Y→j2, right stick Y→j3, X→pitch, L1/R1→roll, D-pad→gripper. Hold <code>L2/R2</code> deadman. Matches <code>arm_joy_teleop.py</code>.
+        </div>
+
+        <div class="mt-3 mono small" style="color:#6b8398">Controllers: <code>trajectory_msgs/JointTrajectory</code> on <code style="color:#22d3ee">/arm_controller/joint_trajectory</code> (5 joints) + <code style="color:#f59e0b">/gripper_controller/joint_trajectory</code> (slider). Same as <code>arm_keyboard_teleop.py</code> / <code>arm_joy_teleop.py</code>.</div>
+      </div>
+    </div>
+  </div>
+</div>
+</div>
+</div>
+
+<script>
+// ---------- Rover ----------
+let maxLin = 0.6, maxAng = 1.5;
+let curLin = 0, curAng = 0;
+let joyActive = false;
+let turbo = false;
+let streamHz = 20;
+let publishTimer = null;
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+async function publishTwist(lin, ang){
+  const topic_name = (document.getElementById('topic-input').value||'/cmd_vel').trim() || '/cmd_vel';
+  const body = { topic_name, linear_x: lin, angular_z: ang };
+  try{
+    const r = await fetch('/api/ros/teleop', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(()=>({}));
+    const st = document.getElementById('teleop-status');
+    const last = document.getElementById('teleop-last');
+    if(r.ok && j.success){ st.textContent='publishing'; st.style.color='#10b981'; last.textContent = new Date().toLocaleTimeString(); }
+    else { st.textContent = j.error || 'error'; st.style.color='#f43f5e'; }
+  }catch(e){ document.getElementById('teleop-status').textContent = String(e); }
+}
+async function stopPublish(){
+  const topic_name = (document.getElementById('topic-input').value||'/cmd_vel').trim() || '/cmd_vel';
+  try{ await fetch('/api/ros/teleop/stop', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({topic_name})}); }catch{}
+  curLin=0; curAng=0;
+  document.getElementById('teleop-status').textContent='idle';
+  updateRoverReadouts();
+}
+function setFromJoystick(dx, dy){
+  const t = turbo ? 1.8 : 1.0;
+  curLin = clamp(dy * maxLin * t, -maxLin*t, maxLin*t);
+  curAng = clamp(-dx * maxAng * t, -maxAng*t, maxAng*t);
+  updateRoverReadouts();
+}
+function updateRoverReadouts(){
+  document.getElementById('val-lin').textContent = curLin.toFixed(2);
+  document.getElementById('val-ang').textContent = curAng.toFixed(2);
+  const mag = Math.min(1, Math.hypot(curLin/maxLin, curAng/maxAng));
+  document.getElementById('vel-fill').style.width = (mag*100).toFixed(0)+'%';
+  const armed = (Math.abs(curLin)>0.01 || Math.abs(curAng)>0.01);
+  const badge = document.getElementById('armed-badge');
+  // only show ARMED when rover tab is active or rover is moving
+  const roverActive = document.getElementById('tab-rover').classList.contains('show');
+  if(roverActive){
+    badge.textContent = armed ? (turbo ? 'TURBO' : 'ARMED') : 'IDLE';
+    badge.className = 'badge rounded-pill ' + (armed ? (turbo?'badge-turbo':'bg-success') : 'bg-secondary');
+  }
+}
+function startStream(){ if(publishTimer) return; publishTimer = setInterval(()=>{ if(document.getElementById('tab-rover').classList.contains('show')) publishTwist(curLin, curAng); }, Math.round(1000/streamHz)); }
+function stopStream(){ if(publishTimer){ clearInterval(publishTimer); publishTimer=null; } }
+(function(){
+  const joy = document.getElementById('joy');
+  const stick = document.getElementById('stick');
+  if(!joy || !stick) return;
+  let dragging=false; let joyRect=null;
+  function posFromEvent(e){
+    const t = (e.touches && e.touches[0]) || e;
+    const r = joyRect;
+    const cx = r.left + r.width/2, cy = r.top + r.height/2;
+    let dx = (t.clientX - cx) / (r.width/2);
+    let dy = (cy - t.clientY) / (r.height/2);
+    const mag = Math.hypot(dx,dy);
+    if(mag>1){ dx/=mag; dy/=mag; }
+    return {dx, dy};
+  }
+  function onDown(e){ e.preventDefault(); dragging=true; joyActive=true; joyRect = joy.getBoundingClientRect(); joy.setPointerCapture && joy.setPointerCapture(e.pointerId||0); startStream(); onMove(e); }
+  function onMove(e){ if(!dragging) return; const {dx,dy}=posFromEvent(e); stick.style.transform = `translate(${dx*72}px, ${-dy*72}px)`; setFromJoystick(dx, dy); }
+  function onUp(e){ if(!dragging) return; dragging=false; joyActive=false; stick.style.transform='translate(0,0)'; curLin=0; curAng=0; updateRoverReadouts(); publishTwist(0,0); }
+  joy.addEventListener('pointerdown', onDown);
+  window.addEventListener('pointermove', onMove);
+  window.addEventListener('pointerup', onUp);
+  joy.addEventListener('touchstart', onDown, {passive:false});
+  window.addEventListener('touchmove', (e)=>{ if(dragging) onMove(e); }, {passive:false});
+  window.addEventListener('touchend', onUp);
+})();
+document.querySelectorAll('#tab-rover .dpad button[data-dir]').forEach(btn=>{
+  const dir = btn.dataset.dir;
+  function press(){ if(dir==='none' || dir==='') return; btn.classList.add('pressed'); if(dir==='forward') curLin = maxLin * (turbo?1.8:1); if(dir==='back') curLin = -maxLin * (turbo?1.8:1); if(dir==='left') curAng = maxAng * (turbo?1.8:1); if(dir==='right') curAng = -maxAng * (turbo?1.8:1); updateRoverReadouts(); startStream(); }
+  function release(){ btn.classList.remove('pressed'); curLin=0; curAng=0; updateRoverReadouts(); publishTwist(0,0); }
+  btn.addEventListener('pointerdown', press); btn.addEventListener('pointerup', release); btn.addEventListener('pointerleave', release);
+});
+const roverKeys = new Set();
+window.addEventListener('keydown', (e)=>{
+  if(e.repeat) return;
+  // only handle rover keys when rover tab active
+  const roverActive = document.getElementById('tab-rover').classList.contains('show');
+  if(!roverActive) return;
+  const k = e.key.toLowerCase();
+  if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright',' '].includes(k) || k==='shift'){
+    if(k==='shift') turbo=true;
+    if(k===' ') { e.preventDefault(); curLin=0; curAng=0; updateRoverReadouts(); stopPublish(); return; }
+    roverKeys.add(k); recomputeRoverKeys(); startStream();
+  }
+  if(k==='escape'){ stopPublish(); stopStream(); curLin=0; curAng=0; updateRoverReadouts(); roverKeys.clear(); }
+});
+window.addEventListener('keyup', (e)=>{
+  const roverActive = document.getElementById('tab-rover').classList.contains('show');
+  if(!roverActive) return;
+  const k=e.key.toLowerCase();
+  if(k==='shift') turbo=false;
+  roverKeys.delete(k); roverKeys.delete(k.replace('arrow',''));
+  recomputeRoverKeys();
+  if(roverKeys.size===0 && !joyActive){ curLin=0; curAng=0; updateRoverReadouts(); publishTwist(0,0); }
+});
+function recomputeRoverKeys(){
+  let lin=0, ang=0; const t = turbo?1.8:1;
+  if(roverKeys.has('w') || roverKeys.has('arrowup')) lin += maxLin*t;
+  if(roverKeys.has('s') || roverKeys.has('arrowdown')) lin -= maxLin*t;
+  if(roverKeys.has('a') || roverKeys.has('arrowleft')) ang += maxAng*t;
+  if(roverKeys.has('d') || roverKeys.has('arrowright')) ang -= maxAng*t;
+  curLin = clamp(lin, -maxLin*t, maxLin*t); curAng = clamp(ang, -maxAng*t, maxAng*t); updateRoverReadouts();
+}
+window.addEventListener('blur', ()=>{ curLin=0; curAng=0; updateRoverReadouts(); stopPublish(); });
+document.addEventListener('visibilitychange', ()=>{ if(document.hidden){ curLin=0; curAng=0; updateRoverReadouts(); stopPublish(); }});
+document.getElementById('btn-turbo').addEventListener('pointerdown', ()=>{ turbo=true; updateRoverReadouts(); });
+document.getElementById('btn-turbo').addEventListener('pointerup', ()=>{ turbo=false; updateRoverReadouts(); recomputeRoverKeys(); });
+document.getElementById('btn-estop').addEventListener('click', ()=>{ curLin=0; curAng=0; updateRoverReadouts(); stopPublish(); stopStream(); roverKeys.clear(); });
+document.getElementById('max-lin').addEventListener('input', (e)=>{ maxLin=parseFloat(e.target.value); document.getElementById('max-lin-label').textContent = maxLin.toFixed(1)+' m/s'; });
+document.getElementById('max-ang').addEventListener('input', (e)=>{ maxAng=parseFloat(e.target.value); document.getElementById('max-ang-label').textContent = maxAng.toFixed(1)+' rad/s'; });
+document.getElementById('topic-input').addEventListener('change', (e)=>{ document.getElementById('topic-label').textContent = e.target.value || '/cmd_vel'; });
+
+// ---------- Arm ----------
+const JOINTS = [
+  {name:'j1_joint', label:'j1 base yaw', min: -3.1416, max: 3.1416, step:0.02, unit:'rad'},
+  {name:'j2_joint', label:'j2 shoulder', min: -1.5708, max: 1.5708, step:0.02, unit:'rad'},
+  {name:'j3_joint', label:'j3 elbow', min: -1.5708, max: 1.5708, step:0.02, unit:'rad'},
+  {name:'ee_base_joint_x', label:'wrist pitch', min: 0, max: 3.1416, step:0.02, unit:'rad'},
+  {name:'ee_base_joint_y', label:'wrist roll', min: -3.1416, max: 3.1416, step:0.02, unit:'rad'},
+  {name:'slider_joint', label:'gripper (slider)', min: 0, max: 0.05, step:0.001, unit:'m'},
+];
+let armPositions = {j1_joint:0, j2_joint:0, j3_joint:0, ee_base_joint_x:0, ee_base_joint_y:0, slider_joint:0};
+let armStepDeg = 3;
+let armEstop = false;
+
+function buildArmSliders(){
+  const host = document.getElementById('arm-sliders');
+  host.innerHTML = JOINTS.map(j=>{
+    const v = armPositions[j.name]||0;
+    const display = j.name==='slider_joint' ? (v*1000).toFixed(1)+' mm' : (v*180/Math.PI).toFixed(1)+'°';
+    return `<div class="arm-slider-row">
+      <span class="mono small" style="color:#8fa3b8">${j.label}<br><span style="color:#6b8398;font-size:11px">${j.name}</span></span>
+      <input type="range" class="form-range range-cyan" data-joint="${j.name}" min="${j.min}" max="${j.max}" step="${j.step}" value="${v}">
+      <span class="joint-value" data-joint-val="${j.name}">${display}</span>
+    </div>`;
+  }).join('');
+  host.querySelectorAll('input[type="range"]').forEach(inp=>{
+    inp.addEventListener('input', (e)=>{
+      const name = e.target.dataset.joint;
+      const val = parseFloat(e.target.value);
+      armPositions[name]=val;
+      updateArmValueLabel(name);
+    });
+    inp.addEventListener('change', ()=>{ sendArm(); });
+  });
+}
+function updateArmValueLabel(name){
+  const j = JOINTS.find(x=>x.name===name);
+  const v = armPositions[name];
+  const el = document.querySelector(`[data-joint-val="${name}"]`);
+  if(!el) return;
+  if(j.name==='slider_joint') el.textContent = (v*1000).toFixed(1)+' mm';
+  else el.textContent = (v*180/Math.PI).toFixed(1)+'° ('+v.toFixed(2)+' rad)';
+}
+function updateAllArmLabels(){ JOINTS.forEach(j=>updateArmValueLabel(j.name)); }
+
+async function sendArm(){
+  if(armEstop) return;
+  const duration = parseFloat(document.getElementById('arm-duration').value)||0.3;
+  const body = {positions: {...armPositions}, duration};
+  try{
+    const r = await fetch('/api/ros/arm/move', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json().catch(()=>({}));
+    const st=document.getElementById('arm-status');
+    const last=document.getElementById('arm-last');
+    if(r.ok && j.success){ st.textContent='sent'; st.style.color='#10b981'; last.textContent=new Date().toLocaleTimeString(); }
+    else { st.textContent=j.error||'error'; st.style.color='#f43f5e'; }
+  }catch(e){ document.getElementById('arm-status').textContent=String(e); }
+}
+async function armHome(){
+  try{
+    const r=await fetch('/api/ros/arm/home', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({duration: parseFloat(document.getElementById('arm-duration').value)||0.8})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok && j.success){ Object.keys(armPositions).forEach(k=>armPositions[k]=0); document.querySelectorAll('#arm-sliders input').forEach(inp=>{ inp.value=0; }); updateAllArmLabels(); document.getElementById('arm-status').textContent='homed'; }
+  }catch(e){ document.getElementById('arm-status').textContent=String(e); }
+}
+async function gripperAction(action){
+  try{
+    const r=await fetch('/api/ros/arm/gripper', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({action, duration:0.5})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok && j.success){
+      armPositions['slider_joint'] = action==='open'?0:0.05;
+      const inp=document.querySelector('input[data-joint="slider_joint"]'); if(inp) inp.value=armPositions['slider_joint'];
+      updateArmValueLabel('slider_joint');
+      document.getElementById('arm-status').textContent= action==='open'?'gripper open':'gripper closed';
+    }
+  }catch(e){ document.getElementById('arm-status').textContent=String(e); }
+}
+
+document.getElementById('btn-arm-home').addEventListener('click', armHome);
+document.getElementById('btn-grip-open').addEventListener('click', ()=>gripperAction('open'));
+document.getElementById('btn-grip-close').addEventListener('click', ()=>gripperAction('close'));
+document.getElementById('btn-arm-estop').addEventListener('click', ()=>{
+  armEstop = !armEstop;
+  const btn=document.getElementById('btn-arm-estop');
+  btn.textContent = armEstop ? 'RELEASE E-STOP' : 'ARM E-STOP';
+  btn.style.background = armEstop ? '#10b981' : '';
+  document.getElementById('arm-status').textContent = armEstop ? 'E-STOP ENGAGED' : 'idle';
+  document.getElementById('arm-status').style.color = armEstop ? '#f43f5e' : '#10b981';
+});
+
+// Arm keyboard (q/a, w/s, e/d, r/f, t/g, y/h) — only when arm tab active
+const ARM_KEYS = {q:['j1_joint',+1], a:['j1_joint',-1], w:['j2_joint',+1], s:['j2_joint',-1], e:['j3_joint',+1], d:['j3_joint',-1], r:['ee_base_joint_x',+1], f:['ee_base_joint_x',-1], t:['ee_base_joint_y',+1], g:['ee_base_joint_y',-1], y:['slider_joint',+1], h:['slider_joint',-1]};
+window.addEventListener('keydown', (e)=>{
+  if(e.repeat) return;
+  const k=e.key.toLowerCase();
+  const armActive = document.getElementById('tab-arm').classList.contains('show');
+  if(!armActive) return;
+  if(k in ARM_KEYS){
+    const [joint, dir] = ARM_KEYS[k];
+    const step = joint==='slider_joint' ? parseFloat(document.getElementById('arm-step').value||3)*0.001*(5/3) : parseFloat(document.getElementById('arm-step').value||3)*Math.PI/180;
+    // slider step is mm: use 5mm per 3° equivalent, but we have separate mm logic — use 2mm
+    let actualStep = step;
+    if(joint==='slider_joint') actualStep = 0.002 * (armStepDeg/3);
+    else actualStep = armStepDeg*Math.PI/180;
+    armPositions[joint] = Math.max(JOINTS.find(j=>j.name===joint).min, Math.min(JOINTS.find(j=>j.name===joint).max, armPositions[joint]+dir*actualStep));
+    const inp=document.querySelector(`input[data-joint="${joint}"]`); if(inp) inp.value=armPositions[joint];
+    updateArmValueLabel(joint);
+    sendArm();
+  } else if(k==='o'){ gripperAction('open'); }
+  else if(k==='c'){ gripperAction('close'); }
+  else if(k==='0'){ armHome(); }
+  else if(k==='?' ){ alert(document.querySelector('#tab-arm .drive-console').innerText.slice(0,500)); }
+});
+document.getElementById('arm-step').addEventListener('input', (e)=>{ armStepDeg=parseInt(e.target.value); document.getElementById('arm-step-label').textContent=armStepDeg+'°'; document.getElementById('arm-step-mm').textContent=(armStepDeg*1.6).toFixed(1)+' mm'; });
+document.getElementById('arm-duration').addEventListener('input', (e)=>{ document.getElementById('arm-duration-label').textContent=parseFloat(e.target.value).toFixed(1)+' s'; });
+
+// Joint states polling
+async function pollJoints(){
+  try{
+    const r=await fetch('/api/ros/joint_states');
+    if(!r.ok) throw new Error('no joint states');
+    const j=await r.json();
+    const pos=j.positions||{};
+    const live=document.getElementById('joint-live');
+    if(!pos || Object.keys(pos).length===0){
+      live.textContent='No joint_states yet — move the arm or wait for /joint_states (is joint_state_broadcaster running?)';
+    } else {
+      // update sliders to match if not being dragged (optional: only show, don't override)
+      live.innerHTML = Object.entries(pos).map(([k,v])=>{
+        const isSlider = k==='slider_joint';
+        const txt = isSlider ? (v*1000).toFixed(1)+' mm' : (v*180/Math.PI).toFixed(1)+'°';
+        return `<div style="display:flex;justify-content:space-between"><span>${k}</span><span style="color:#22d3ee">${txt}</span></div>`;
+      }).join('');
+      live.innerHTML += `<div class="mt-1" style="color:#6b8398;font-size:11px">stamp: ${j.stamp||'—'}</div>`;
+      // optional sync sliders when arm not actively controlled — we won't auto-sync to avoid fighting user
+    }
+  }catch(e){
+    // keep last
+  }
+  setTimeout(pollJoints, 800);
+}
+
+// Gamepad for arm — mirrors arm_joy_teleop.py: lx→j1, ly→j2, ry→j3, rx→pitch, L1/R1 roll, dpad gripper, L2/R2 deadman
+function armGamepadLoop(){
+  const armActive = document.getElementById('tab-arm').classList.contains('show');
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+  let found=false;
+  for(const gp of gps){
+    if(!gp) continue;
+    found=true;
+    const badge=document.getElementById('arm-gamepad-badge');
+    if(badge){ badge.textContent='Gamepad: '+gp.id.slice(0,22); badge.style.background='#10b981'; badge.style.color='#001018'; }
+    if(!armActive) continue;
+    // deadman L2/R2
+    const l2 = (gp.axes[2]!==undefined ? gp.axes[2] : gp.buttons[6]?.value||0);
+    const r2 = (gp.axes[5]!==undefined ? gp.axes[5] : gp.buttons[7]?.value||0);
+    const deadman = (l2>0.5 || r2>0.5 || (gp.buttons[6]?.pressed) || (gp.buttons[7]?.pressed));
+    if(armEstop) continue;
+    if(!deadman) continue;
+    const dead=0.08;
+    function dz(v){ return Math.abs(v)<dead?0: Math.sign(v)*(Math.abs(v)-dead)/(1-dead); }
+    const lx=dz(gp.axes[0]||0), ly=dz(gp.axes[1]||0), rx=dz(gp.axes[2]||gp.axes[3]||0), ry=dz(gp.axes[4]||gp.axes[3]||0);
+    const ax_lx = gp.axes[0]||0, ax_ly=gp.axes[1]||0, ax_rx=gp.axes[3]||0, ax_ry=gp.axes[4]||0;
+    // actually map per standard: lx 0, ly 1, rx 3, ry 4 ; fallback
+    const jlx = dz(gp.axes[0]||0);
+    const jly = dz(gp.axes[1]||0);
+    const jrx = dz(gp.axes[3]||0);
+    const jry = dz(gp.axes[4]||0);
+    let changed=false;
+    const dt = 0.02; // 50Hz loop
+    const maxSpeed = 0.8; // rad/s
+    const wristSpeed=1.0, sliderSpeed=0.02;
+    if(Math.abs(jlx)>0.08){ armPositions['j1_joint'] += jlx*maxSpeed*dt; changed=true; armPositions['j1_joint']=clamp(armPositions['j1_joint'], -6.28, 6.28); }
+    if(Math.abs(jly)>0.08){ armPositions['j2_joint'] += -jly*maxSpeed*dt; changed=true; armPositions['j2_joint']=clamp(armPositions['j2_joint'], -1.5708, 1.5708); }
+    if(Math.abs(jry)>0.08){ armPositions['j3_joint'] += -jry*maxSpeed*dt; changed=true; armPositions['j3_joint']=clamp(armPositions['j3_joint'], -1.5708, 1.5708); }
+    if(Math.abs(jrx)>0.08){ armPositions['ee_base_joint_x'] += jrx*wristSpeed*dt; changed=true; armPositions['ee_base_joint_x']=clamp(armPositions['ee_base_joint_x'], 0, 3.1416); }
+    // L1/R1 for roll
+    const l1 = gp.buttons[4]?.pressed, r1=gp.buttons[5]?.pressed;
+    if(l1) { armPositions['ee_base_joint_y'] -= wristSpeed*dt; changed=true; }
+    if(r1) { armPositions['ee_base_joint_y'] += wristSpeed*dt; changed=true; }
+    // D-pad for gripper
+    let dpad=0;
+    if(gp.axes[6]!==undefined){ if(gp.axes[6]>0.5) dpad=-1; else if(gp.axes[6]<-0.5) dpad=1; }
+    if(gp.buttons[12]?.pressed) dpad=1;
+    if(gp.buttons[13]?.pressed) dpad=-1;
+    if(gp.buttons[11]?.pressed) dpad=1; // up
+    if(gp.buttons[12]?.pressed) dpad=-1;
+    if(dpad!==0){ armPositions['slider_joint'] += -dpad*sliderSpeed*dt; armPositions['slider_joint']=clamp(armPositions['slider_joint'],0,0.05); changed=true; }
+    if(changed){
+      // update sliders UI
+      JOINTS.forEach(j=>{ const inp=document.querySelector(`input[data-joint="${j.name}"]`); if(inp) inp.value=armPositions[j.name]; updateArmValueLabel(j.name); });
+      // throttle publish ~20Hz
+      if(!window._armGpLast || Date.now()-window._armGpLast>50){ window._armGpLast=Date.now(); sendArm(); }
+    }
+  }
+  if(!found){
+    const b=document.getElementById('arm-gamepad-badge'); if(b){ b.textContent='Gamepad: none'; b.style.background=''; b.style.color=''; }
+  }
+  requestAnimationFrame(armGamepadLoop);
+}
+window.addEventListener('gamepadconnected', (e)=>{ console.log('Gamepad connected', e.gamepad.id); });
+
+// Gamepad for rover (as before, but keep unified loop)
+function roverGamepadLoop(){
+  const roverActive = document.getElementById('tab-rover').classList.contains('show');
+  const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+  let found=false;
+  for(const gp of gps){
+    if(!gp) continue;
+    if(!roverActive) continue;
+    found=true;
+    const badge=document.getElementById('gamepad-badge');
+    if(badge){ badge.textContent = 'Gamepad: '+gp.id.slice(0,22); badge.className='badge mono'; badge.style.background='#10b981'; badge.style.color='#001018'; }
+    const lx = gp.axes[0]||0, ly = gp.axes[1]||0;
+    const dead=0.15;
+    const dx = Math.abs(lx)>dead? lx:0;
+    const dy = Math.abs(ly)>dead? -ly:0;
+    if(Math.abs(dx)>dead || Math.abs(dy)>dead){ setFromJoystick(dx, dy); startStream(); document.getElementById('stick').style.transform = `translate(${dx*72}px, ${-dy*72}px)`; }
+  }
+  if(!found && document.getElementById('tab-rover').classList.contains('show')){
+    // keep badge as is for arm loop
+  }
+  requestAnimationFrame(roverGamepadLoop);
+}
+
+// Init
+buildArmSliders(); updateAllArmLabels();
+updateRoverReadouts(); startStream();
+pollJoints();
+armGamepadLoop();
+roverGamepadLoop();
+</script>
+{% endblock %}

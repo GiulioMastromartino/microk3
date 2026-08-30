@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="fas fa-microchip me-2"></i>Jetson Diagnostics{% if jetson_diag and jetson_diag.board %} <small class="text-muted" style="font-size:0.55em">{{ jetson_diag.board }}</small>{% endif %}</h2>
+    <span id="jd-status" class="badge bg-secondary">—</span>
+</div>
+
+{% if not jetson_diag or not jetson_diag.available %}
+<div class="alert alert-warning">Jetson diagnostics are unavailable on this host: {{ jetson_diag.reason or 'not running on Jetson hardware' }}. When deployed on the Jetson the page will show live Orin NX sensor data.</div>
+{% endif %}
+
+<div class="row g-3">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between"><span><i class="fas fa-temperature-half me-1"></i>Temperatures (°C)</span><span id="jd-ts" class="text-muted small">—</span></div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0">
+                    <thead><tr><th>Zone</th><th class="text-end">Temp</th></tr></thead>
+                    <tbody id="jd-temps"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-bolt me-1"></i> Power &amp; Memory</div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between"><span>Total power</span><strong id="jd-power-total">—</strong></div>
+                <div id="jd-power-rails" class="mt-2 small"></div>
+                <hr>
+                <div class="d-flex justify-content-between"><span>RAM</span><span id="jd-ram">—</span></div>
+                <div class="progress mt-1" style="height:8px"><div id="jd-ram-bar" class="progress-bar bg-success"></div></div>
+                <div class="small text-muted mt-2">Source: <span id="jd-source">—</span> · <span id="jd-source-detail">—</span></div>
+                <div class="small text-muted">ROS topic: <code>microk3/jetson_diagnostics</code> (<code>std_msgs/String</code> JSON)</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-gamepad me-1"></i> GPU</div>
+            <div class="card-body">
+                <div class="d-flex justify-content-between"><span>Utilization</span><strong id="jd-gpu-p">—</strong></div>
+                <div class="d-flex justify-content-between"><span>Frequency</span><strong id="jd-gpu-f">—</strong></div>
+                <div class="d-flex justify-content-between"><span>Aggregate CPU</span><strong id="jd-cpu-agg">—</strong></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header"><i class="fas fa-gauge me-1"></i> CPU per-core — utilization &amp; frequency (MHz)</div>
+            <div class="card-body">
+                <div id="jd-cores" class="row g-2"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-3">
+    <div class="col-md-12">
+        <pre id="jd-json" class="bg-light p-3 rounded small" style="max-height:320px;overflow:auto"></pre>
+    </div>
+</div>
+
+<script>
+const POLL_MS = 2000;
+function fmt(v, frac, suffix){ if(v==null) return "—"; return Number(v).toFixed(frac)+(suffix||""); }
+function clsForTemp(t){ if(t>80) return "text-danger fw-bold"; if(t>60) return "text-warning"; return ""; }
+function render(d){
+    const tsEl = document.getElementById('jd-ts');
+    const statusEl = document.getElementById('jd-status');
+    if(!d || !d.available){ statusEl.textContent="unavailable"; statusEl.className="badge bg-secondary"; tsEl.textContent=d && d.timestamp || "—"; return; }
+    tsEl.textContent = d.timestamp || "—";
+    statusEl.textContent = "live · "+(d.source||"");
+    statusEl.className = "badge bg-success";
+    // temps
+    const tb = document.getElementById('jd-temps'); tb.innerHTML="";
+    const temps = d.temperatures || {};
+    const order = ["cpu-thermal","gpu-thermal","cv0-thermal","cv1-thermal","cv2-thermal","soc0-thermal","soc1-thermal","soc2-thermal","tj-thermal"];
+    const seen = new Set();
+    for(const k of order){ if(k in temps){ const v=temps[k]; const tr=document.createElement("tr"); tr.innerHTML=`<td>${k}</td><td class="text-end ${clsForTemp(v)}">${fmt(v,1,"°C")}</td>`; tb.appendChild(tr); seen.add(k); } }
+    for(const [k,v] of Object.entries(temps)){ if(seen.has(k)) continue; const tr=document.createElement("tr"); tr.innerHTML=`<td>${k}</td><td class="text-end ${clsForTemp(v)}">${fmt(v,1,"°C")}</td>`; tb.appendChild(tr); }
+    // power & mem
+    document.getElementById('jd-power-total').textContent = fmt(d.power && d.power.total_w,1," W");
+    const railsEl = document.getElementById('jd-power-rails'); railsEl.innerHTML="";
+    for(const [k,v] of Object.entries((d.power && d.power.rails) || {})){ if(k==="total") continue; const div=document.createElement("div"); div.className="d-flex justify-content-between"; div.innerHTML=`<span>${k}</span><span>${fmt(v,2," W")}</span>`; railsEl.appendChild(div); }
+    document.getElementById('jd-ram').textContent = d.memory ? `${d.memory.used_mb} / ${d.memory.total_mb} MB (${d.memory.percent}%)` : "—";
+    document.getElementById('jd-ram-bar').style.width = (d.memory && d.memory.percent || 0)+"%";
+    document.getElementById('jd-source').textContent = d.source || "—";
+    document.getElementById('jd-source-detail').textContent = d.timestamp || "—";
+    document.getElementById('jd-gpu-p').textContent = fmt(d.gpu && d.gpu.percent,1,"%");
+    document.getElementById('jd-gpu-f').textContent = fmt(d.gpu && d.gpu.freq_mhz,0," MHz");
+    document.getElementById('jd-cpu-agg').textContent = fmt(d.cpu && d.cpu.aggregate_percent,1,"%");
+    const coresEl = document.getElementById('jd-cores'); coresEl.innerHTML="";
+    for(const c of (d.cpu && d.cpu.cores) || []){ const div=document.createElement("div"); div.className="col-md-3"; div.innerHTML=`<div class="card"><div class="card-body py-2"><div class="d-flex justify-content-between small"><span>CPU${c.core}</span><span class="fw-bold">${fmt(c.percent,1,"%")}</span></div><div class="progress mt-1" style="height:6px"><div class="progress-bar" style="width:${c.percent||0}%"></div></div><div class="small text-muted mt-1">${fmt(c.freq_mhz,0," MHz")}</div></div></div>`; coresEl.appendChild(div); }
+    document.getElementById('jd-json').textContent = JSON.stringify(d, null, 2);
+}
+// initial render from server
+render({{ jetson_diag|tojson }});
+async function poll(){
+    try{ const r=await fetch('/api/jetson/diagnostics'); if(!r.ok) return; render(await r.json()); }catch(e){}
+}
+setInterval(poll, POLL_MS);
+</script>
+{% endblock %}

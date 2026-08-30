@@ -46,6 +46,14 @@ class Config:
     RATELIMIT_STORAGE_URL = "memory://"
     RATELIMIT_DEFAULT = "200 per day;50 per hour"
 
+    # Publisher Studio / Teleop
+    PUBLISH_RATE_MAX_HZ = int(os.environ.get("PUBLISH_RATE_MAX_HZ", "30"))
+    TELEOP_DEFAULT_TOPIC = os.environ.get("TELEOP_DEFAULT_TOPIC", "/cmd_vel")
+    TELEOP_ALLOWED_TOPICS = [s.strip() for s in os.environ.get("TELEOP_ALLOWED_TOPICS", "/cmd_vel,/rover/cmd_vel,/diff_drive_controller/cmd_vel").split(",") if s.strip()]
+    TELEOP_MAX_LINEAR = float(os.environ.get("TELEOP_MAX_LINEAR", "1.0"))
+    TELEOP_MAX_ANGULAR = float(os.environ.get("TELEOP_MAX_ANGULAR", "2.0"))
+    PUBLISH_ALLOWED_TOPICS = os.environ.get("PUBLISH_ALLOWED_TOPICS", "*")  # "*" or comma list
+
 
 class DevelopmentConfig(Config):
     """Development configuration"""

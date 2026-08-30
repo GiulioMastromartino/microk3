@@ -31,6 +31,11 @@ from metrics import (
 from config import get_config
 from ssh_terminal import SSHAuthenticationFailed, SSHConnectionFailed, SSHPasswordRequired, SSHSessionManager
 
+try:
+    from jetson_diagnostics import JetsonDiagnosticsCollector  # type: ignore
+except Exception:  # pragma: no cover - missing wheel not fatal, sysfs path still works
+    JetsonDiagnosticsCollector = None  # type: ignore
+
 # Initialize Flask app
 app = Flask(__name__, template_folder='templates')
 app.config.from_object(get_config())
@@ -247,6 +252,8 @@ def get_node_log_lines(node_id: int, limit: int = 100) -> List[str]:
 # Global variable to hold system data
 system_data = None  # Will be initialized in main block
 ros_inspector_state = get_empty_ros_state()
+jetson_diag_state: Dict[str, Any] = {"available": False}
+jetson_diag_collector = None  # type: ignore
 
 
 def require_json(f):
@@ -512,6 +519,10 @@ def ros_update_callback(action, data):
                 merge_container_metrics(system_data.setdefault("metrics", new_metrics_state()), data)
                 apply_runtime_metrics_to_nodes()
 
+            elif action == 'jetson_diagnostics':
+                global jetson_diag_state
+                jetson_diag_state = data if isinstance(data, dict) else {"available": False, "raw": data}
+
             elif action == 'graph_snapshot':
                 with ros_state_lock:
                     ros_inspector_state["graph_nodes"] = data.get("nodes", [])
@@ -601,7 +612,22 @@ def index():
         system_data=template_data,
         ros_connected=ros_connected,
         metrics_summary=get_metrics_summary(),
+        jetson_diag=jetson_diag_state,
     )
+
+
+@app.route('/jetson-diagnostics')
+def jetson_diagnostics_page():
+    """Jetson host diagnostics page."""
+    if not system_data:
+        return "System initializing...", 503
+    return render_template('jetson_diagnostics.html', jetson_diag=jetson_diag_state)
+
+
+@app.route('/api/jetson/diagnostics')
+def api_jetson_diagnostics():
+    """Return latest Jetson host diagnostics payload."""
+    return jsonify(jetson_diag_state), 200
 
 
 @app.route('/nodes')
@@ -645,6 +671,22 @@ def occupancy_map_page():
     if not system_data:
         return "System initializing...", 503
     return render_template('occupancy_map.html')
+
+
+@app.route('/command')
+def command_page():
+    """Publisher Studio — generic topic publisher."""
+    if not system_data:
+        return "System initializing...", 503
+    return render_template('command.html', ros_state=get_ros_graph_payload())
+
+
+@app.route('/drive')
+def drive_page():
+    """Teleop Drive — joystick / keyboard teleop publishing Twist."""
+    if not system_data:
+        return "System initializing...", 503
+    return render_template('drive.html', ros_state=get_ros_graph_payload())
 
 
 @app.route('/assets/models/Model3D_mesh2.obj')
@@ -996,6 +1038,218 @@ def api_ros_unwatch_topic():
         return jsonify(result), status
     except Exception as e:
         logger.error(f"Error unwatching ROS topic: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+# ------------------------------------------------------------------
+# Generic publish + Teleop (Publisher Studio / Drive)
+# ------------------------------------------------------------------
+
+def _is_publish_allowed(topic_name: str) -> bool:
+    allowed = app.config.get('PUBLISH_ALLOWED_TOPICS', '*')
+    if allowed == '*' or allowed == ['*']:
+        return True
+    # support both string and list from config
+    if isinstance(allowed, str):
+        if allowed.strip() == '*':
+            return True
+        allowed_list = [s.strip() for s in allowed.split(',') if s.strip()]
+    else:
+        allowed_list = list(allowed)
+    return topic_name in allowed_list or '*' in allowed_list
+
+
+def _is_teleop_allowed(topic_name: str) -> bool:
+    allowed = app.config.get('TELEOP_ALLOWED_TOPICS', ['/cmd_vel'])
+    if isinstance(allowed, str):
+        allowed = [s.strip() for s in allowed.split(',') if s.strip()]
+    return topic_name in allowed
+
+
+@app.route('/api/ros/publish', methods=['POST'])
+@require_json
+@limiter.limit("60 per minute")
+def api_ros_publish():
+    """Generic topic publish — validated and delegated to ROS node."""
+    try:
+        data = request.get_json() or {}
+        topic_name = _normalize_topic_name(data.get("topic_name"))
+        topic_type = str(data.get("topic_type", "")).strip()
+        payload = data.get("payload", data.get("data"))
+        if not topic_name:
+            return jsonify({"error": "Missing required field: topic_name"}), 400
+        if not topic_type:
+            return jsonify({"error": "Missing required field: topic_type"}), 400
+        if payload is None:
+            return jsonify({"error": "Missing required field: payload"}), 400
+        if not _is_publish_allowed(topic_name):
+            return jsonify({"error": f"Publishing to {topic_name} is not allowed"}), 403
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.publish_generic(topic_name, topic_type, payload)
+        status = 200 if result.get("success") else 400
+        if result.get("success"):
+            logger.info("Publish %s %s payload=%s", topic_name, topic_type, str(payload)[:300])
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception("Error publishing ROS topic")
+        return jsonify({"error": "Internal server error", "detail": str(e)}), 500
+
+
+@app.route('/api/ros/teleop', methods=['POST'])
+@require_json
+@limiter.limit("120 per minute")
+def api_ros_teleop():
+    """Teleop Twist publish — clamped, rate-limited, watch-dogged."""
+    try:
+        data = request.get_json() or {}
+        topic_name = _normalize_topic_name(data.get("topic_name") or app.config.get('TELEOP_DEFAULT_TOPIC', '/cmd_vel'))
+        if not topic_name:
+            topic_name = _normalize_topic_name(app.config.get('TELEOP_DEFAULT_TOPIC', '/cmd_vel'))
+        if not _is_teleop_allowed(topic_name):
+            return jsonify({"error": f"Teleop to {topic_name} is not allowed"}), 403
+        try:
+            linear_x = float(data.get("linear_x", 0.0))
+            angular_z = float(data.get("angular_z", 0.0))
+            linear_y = float(data.get("linear_y", 0.0))
+            linear_z = float(data.get("linear_z", 0.0))
+            angular_x = float(data.get("angular_x", 0.0))
+            angular_y = float(data.get("angular_y", 0.0))
+        except (TypeError, ValueError):
+            return jsonify({"error": "linear_x/angular_z must be numbers"}), 400
+
+        max_lin = float(app.config.get('TELEOP_MAX_LINEAR', 1.0))
+        max_ang = float(app.config.get('TELEOP_MAX_ANGULAR', 2.0))
+        # clamp
+        linear_x = max(-max_lin, min(max_lin, linear_x))
+        angular_z = max(-max_ang, min(max_ang, angular_z))
+
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.publish_twist(topic_name, linear_x, angular_z, linear_y, linear_z, angular_x, angular_y)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception("Error in teleop publish")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/ros/teleop/stop', methods=['POST'])
+@require_json
+@limiter.limit("60 per minute")
+def api_ros_teleop_stop():
+    try:
+        data = request.get_json() or {}
+        topic_name = _normalize_topic_name(data.get("topic_name") or app.config.get('TELEOP_DEFAULT_TOPIC', '/cmd_vel'))
+        if not topic_name:
+            topic_name = _normalize_topic_name(app.config.get('TELEOP_DEFAULT_TOPIC', '/cmd_vel'))
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.stop_teleop(topic_name)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception("Error stopping teleop")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/ros/arm/move', methods=['POST'])
+@require_json
+@limiter.limit("60 per minute")
+def api_ros_arm_move():
+    """Arm JointTrajectory publish — joints clamped to URDF limits."""
+    try:
+        data = request.get_json() or {}
+        positions = data.get("positions") or data.get("joints") or {}
+        if not isinstance(positions, dict) or not positions:
+            return jsonify({"error": "Missing required field: positions (dict of joint->value)"}), 400
+        try:
+            duration = float(data.get("duration", 0.5))
+        except (TypeError, ValueError):
+            return jsonify({"error": "duration must be a number"}), 400
+        # validate numeric
+        clean = {}
+        for k, v in positions.items():
+            try:
+                clean[str(k)] = float(v)
+            except (TypeError, ValueError):
+                return jsonify({"error": f"joint {k} value must be numeric"}), 400
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.publish_arm_trajectory(clean, duration)
+        status = 200 if result.get("success") else 400
+        if result.get("success"):
+            logger.info("Arm move positions=%s duration=%.2f", clean, duration)
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception("Error in arm move")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/ros/arm/home', methods=['POST'])
+@require_json
+@limiter.limit("30 per minute")
+def api_ros_arm_home():
+    try:
+        data = request.get_json() or {}
+        duration = float(data.get("duration", 0.8))
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        positions = {
+            'j1_joint': 0.0,
+            'j2_joint': 0.0,
+            'j3_joint': 0.0,
+            'ee_base_joint_x': 0.0,
+            'ee_base_joint_y': 0.0,
+            'slider_joint': 0.0,
+        }
+        result = ros_manager.publish_arm_trajectory(positions, duration)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception("Error in arm home")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/ros/arm/gripper', methods=['POST'])
+@require_json
+@limiter.limit("30 per minute")
+def api_ros_arm_gripper():
+    try:
+        data = request.get_json() or {}
+        action = str(data.get("action", "")).strip().lower()
+        duration = float(data.get("duration", 0.5))
+        if action not in ("open", "close"):
+            # also allow explicit position
+            if "position" in data:
+                pos = float(data["position"])
+                positions = {"slider_joint": pos}
+            else:
+                return jsonify({"error": "action must be 'open' or 'close' or provide position"}), 400
+        else:
+            positions = {"slider_joint": 0.0 if action == "open" else 0.05}
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        result = ros_manager.publish_arm_trajectory(positions, duration)
+        status = 200 if result.get("success") else 400
+        return jsonify(result), status
+    except Exception as e:
+        logger.exception("Error in gripper action")
+        return jsonify({"error": "Internal server error"}), 500
+
+
+@app.route('/api/ros/joint_states')
+@limiter.limit("120 per minute")
+def api_ros_joint_states():
+    try:
+        if not (ROS_AVAILABLE and ros_manager and ros_manager.running):
+            return jsonify({"error": "ROS 2 is not connected"}), 503
+        data = ros_manager.get_joint_states()
+        if data is None:
+            return jsonify({"positions": {}, "stamp": None}), 200
+        return jsonify(data), 200
+    except Exception as e:
+        logger.exception("Error getting joint states")
         return jsonify({"error": "Internal server error"}), 500
 
 
